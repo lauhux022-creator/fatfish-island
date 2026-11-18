@@ -1,3 +1,4 @@
+import { BUILD_KINDS, type BuildKind } from '../shared/sim/campaign-types';
 import { DEFAULT_WORKER_ROLE, isWorkerRoleId } from '../shared/sim/cast';
 import { STEP_SECONDS } from '../shared/sim/config';
 import { emptyInput, type SimInput, type SimSnapshot, type Vec3 } from '../shared/sim/types';
@@ -30,6 +31,9 @@ const debug = params.get('debug') === '1';
 const selectedRole = params.get('role');
 const roleId = isWorkerRoleId(selectedRole) ? selectedRole : DEFAULT_WORKER_ROLE;
 const shiftSeconds = debug && params.has('shiftSeconds') ? Number(params.get('shiftSeconds')) : undefined;
+const nightSeconds = debug && params.has('nightSeconds') ? Number(params.get('nightSeconds')) : undefined;
+const buildKeys = new Map<string, BuildKind>(BUILD_KINDS.map((kind, index) => [`Digit${index + 1}`, kind]));
+const buildControls = new Map<string, BuildKind>(BUILD_KINDS.map((kind) => [`build:${kind}`, kind]));
 
 const app = document.querySelector<HTMLElement>('#app')!;
 let queuedChat: string | undefined;
@@ -43,7 +47,7 @@ async function startGame() {
     import('./scene'),
   ]);
   const scene = createScene(hud.canvas);
-  const sim = await createSimulation({ seed, day, shiftSeconds, roleId });
+  const sim = await createSimulation({ seed, day, shiftSeconds, nightSeconds, roleId });
   const sound = createSound();
   const events = new AbortController();
   const options = { signal: events.signal };
@@ -62,6 +66,7 @@ async function startGame() {
     seed,
     day: debug ? day : undefined,
     shiftSeconds,
+    nightSeconds,
     onStatus(status) {
       if (status.mode !== lastMode) {
         clearControls();
@@ -89,7 +94,7 @@ async function startGame() {
 
   function canPlay() {
     const mode = room.status().mode;
-    return (mode === 'local' || mode === 'playing') && !lobbyOpen();
+    return (mode === 'local' || mode === 'playing') && !lobbyOpen() && snapshot.campaign.phase !== 'cleared';
   }
 
   if (debug) {
@@ -119,6 +124,8 @@ async function startGame() {
     input.interactPressed = false;
     input.jumpPressed = false;
     input.continuePressed = false;
+    input.build = undefined;
+    input.revivePressed = false;
   }
 
   function toggleMute() {
@@ -153,6 +160,16 @@ async function startGame() {
     }
     if (event.code === 'KeyT' && !event.repeat && hud.focusChat()) {
       event.preventDefault();
+      return;
+    }
+    const build = buildKeys.get(event.code);
+    if (build || event.code === 'KeyR') {
+      event.preventDefault();
+      if (!event.repeat) {
+        sound.unlock();
+        if (build) input.build = build;
+        else input.revivePressed = true;
+      }
       return;
     }
     if (target instanceof HTMLElement && target.closest('button, summary') && event.code === 'Space') return;
@@ -239,7 +256,7 @@ async function startGame() {
     const control = button?.dataset.control;
     if (!button || !control) return;
     sound.unlock();
-    if (control === 'sound') return;
+    if (control === 'sound' || control === 'campaign-exit') return;
     event.preventDefault();
     button.setPointerCapture(event.pointerId);
     touch.set(event.pointerId, control);
@@ -247,6 +264,9 @@ async function startGame() {
     if (control === 'swing') input.swingPressed = true;
     if (control === 'interact') input.interactPressed = true;
     if (control === 'jump') input.jumpPressed = true;
+    const build = buildControls.get(control);
+    if (build) input.build = build;
+    if (control === 'revive') input.revivePressed = true;
   }, options);
 
   const releaseTouch = (event: PointerEvent) => {
@@ -263,6 +283,11 @@ async function startGame() {
   app.addEventListener('click', (event) => {
     if (!(event.target instanceof Element)) return;
     const control = event.target.closest<HTMLElement>('[data-control]')?.dataset.control;
+    if (control === 'campaign-exit' && snapshot.campaign.phase === 'cleared') {
+      if (room.status().mode === 'local') location.reload();
+      else room.leave();
+      return;
+    }
     if (control === 'continue' && canPlay() && snapshot.shiftPaused) input.continuePressed = true;
     if (control === 'sound') {
       sound.unlock();
@@ -307,6 +332,8 @@ async function startGame() {
       input.interactPressed = false;
       input.jumpPressed = false;
       input.continuePressed = false;
+      input.build = undefined;
+      input.revivePressed = false;
       accumulated = pauseChanged ? 0 : accumulated - stepMs;
     }
 

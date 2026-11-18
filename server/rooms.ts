@@ -193,6 +193,7 @@ export function attachRoomServer(
         seed: message.seed ?? randomBytes(8).toString('hex'),
         day: message.day,
         shiftSeconds: message.shiftSeconds,
+        nightSeconds: message.nightSeconds,
         roleId: message.roleId,
         brain,
       });

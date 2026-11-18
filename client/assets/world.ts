@@ -80,7 +80,7 @@ function water(parent: T.Object3D) {
   cells.setAttribute('color', new T.Float32BufferAttribute(channel, 3));
   parent.add(new T.Mesh(cells, material));
 
-  return uniform;
+  return { uniform, material };
 }
 
 function makeShore(parent: T.Group, kit: GeometryKit) {
@@ -322,6 +322,19 @@ export function makeIsland(parent: T.Scene, kit: GeometryKit, assets: ActorAsset
   const boss = makeBoss(parent, kit);
   const feiyu = makeFeiyu(parent, kit, assets);
   const foam = shorelineFoam(parent);
+  const moon = kit.group(parent, 9.3, 1.2, -36);
+  const moonlight = new T.Mesh(
+    new T.SphereGeometry(1.12, 18, 12),
+    new T.MeshBasicMaterial({ color: 0xdbe9ff, fog: false, toneMapped: false }),
+  );
+  const moonHalo = new T.Mesh(
+    new T.CircleGeometry(1.38, 32),
+    new T.MeshBasicMaterial({ color: 0xa6b8ec, transparent: true, opacity: 0.18, depthWrite: false, fog: false }),
+  );
+  moonlight.position.z = 0.09;
+  moon.add(moonHalo, moonlight);
+  const daySea = new T.Color(0xffffff);
+  const nightSea = new T.Color(0x6093ce);
   const bossRipples = [ring(parent, 0xbbe3b7, 0.7, -0.417, -18, 3.81, 2.16, 0.016, 0.68), ring(parent, 0xa5d5b5, 0.7, -0.419, -18, 5.21, 3.03, 0.012, 0.45)];
   const ripples = FISHING.goodSpots.map(({ x, z }, index) => {
     const surface = ISLAND.seaY + 0.10;
@@ -330,8 +343,13 @@ export function makeIsland(parent: T.Scene, kit: GeometryKit, assets: ActorAsset
   });
   mergeStatic(landscape);
 
-  function animate(seconds: number, delta: number, emotion: FishEmotion, speaking: boolean) {
-    seaTime.value = seconds;
+  function animate(seconds: number, delta: number, emotion: FishEmotion, speaking: boolean, night: number) {
+    seaTime.uniform.value = seconds;
+    seaTime.material.color.copy(daySea).lerp(nightSea, night);
+    moon.visible = night > 0.25;
+    const moonRise = Math.max(0, (night - 0.25) / 0.75);
+    moon.scale.setScalar(0.52 + moonRise * 0.48);
+    moon.position.y = -0.3 + moonRise * 1.5;
     boss.fish.position.y = 0.29 + Math.sin(seconds * 1.1) * 0.13;
     boss.fish.rotation.z = Math.sin(seconds * 0.72) * 0.023;
     boss.fish.visible = !feiyu.actor.ready;

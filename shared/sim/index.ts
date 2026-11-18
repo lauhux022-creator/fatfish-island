@@ -4,11 +4,14 @@ import { MockBrain } from '../fish-brain/mock';
 import { FishBrainRuntime, type FishRequest } from '../fish-brain/runtime';
 import type { FishBrain, FishBrainOutput, FishEvent, FishObservedEvent } from '../fish-brain/types';
 import { createBotController } from './bots';
+import type { BuildKind, CampaignCycleResult, CampaignPhase, CampaignView } from './campaign-types';
 import { assignWorkerRoles, DEFAULT_WORKER_ROLE, WORKER_ROLES, type WorkerAnimation, type WorkerRoleId } from './cast';
+import { BOSS, CAMPAIGN, CREW, FISH, FISHING, ISLAND, PLAY, SHIFT, STEP_SECONDS, TEAM_DAILY_KPI, TICKS_PER_SECOND, WORKER_MOTION } from './config';
+import { buildAhead } from './construction';
+import { Defense } from './defense';
 import { resolveMovement, yawRotation } from './prediction';
 import { seededRandom } from './random';
 import { emptyInput } from './types';
-import { BOSS, CREW, FISH, FISHING, ISLAND, PLAY, SHIFT, STEP_SECONDS, TEAM_DAILY_KPI, TICKS_PER_SECOND, WORKER_MOTION } from './config';
 import type {
   BossLine, CrateView, FishKind, FishState, HookPhase, HookView, PlayerMetrics, PlayerView, Pose, RagdollLimb,
   ShiftResult, SimInput, SimNotice, SimSnapshot, Vec3,
@@ -18,6 +21,7 @@ interface SimulationOptions {
   seed?: string;
   day?: number;
   shiftSeconds?: number;
+  nightSeconds?: number;
   roleId?: WorkerRoleId;
   brain?: FishBrain;
 }
@@ -112,6 +116,12 @@ interface Actor {
   lastSwallowedDay: number;
   metrics: ActorMetrics;
   optimization: boolean;
+  cycleCash: number;
+  cycleSold: number;
+  ghostPosition: Vec3 | null;
+  ghostVelocity: Vec3;
+  nextPrankAt: number;
+  revivePaid: number;
 }
 
 const PLAYER_RADIUS = 0.31;
@@ -182,11 +192,21 @@ class IslandSimulation {
   private readonly random: () => number;
   private readonly bots: ReturnType<typeof createBotController>;
   private readonly shiftLength: number;
+  private readonly nightLength: number;
+  private readonly defense: Defense;
   private readonly boss: FishBrainRuntime;
   private day: number;
   private shiftEnd: number;
   private shiftPaused = false;
+  private phase: CampaignPhase = 'day';
   private result: ShiftResult | null = null;
+  private cycleFirstDay: number;
+  private cycleTarget = 0;
+  private lastCycle: CampaignCycleResult | null = null;
+  private readonly warehouseLots: number[] = [];
+  private warehouseValue = 0;
+  private warehouseLostFish = 0;
+  private warehouseLostValue = 0;
   private tick = 0;
   private nextEntityId = 0;
   private readonly notices = new Map<string, SimNotice>();
@@ -198,15 +218,21 @@ class IslandSimulation {
   private rewardCrates = 0;
 
   constructor({
-    seed = 'dock-shift', day = 1, shiftSeconds = PLAY.daySeconds, roleId = DEFAULT_WORKER_ROLE, brain = new MockBrain(),
+    seed = 'dock-shift', day = 1, shiftSeconds = PLAY.daySeconds, nightSeconds = CAMPAIGN.nightSeconds,
+    roleId = DEFAULT_WORKER_ROLE, brain = new MockBrain(),
   }: SimulationOptions) {
     this.seed = seed;
     this.day = Number.isFinite(day) ? Math.max(1, Math.trunc(day)) : 1;
+    this.cycleFirstDay = this.day;
     this.random = seededRandom(`${seed}:world`);
     this.bots = createBotController(seed);
+    this.defense = new Defense(seed);
     this.boss = new FishBrainRuntime(brain);
     const seconds = Number.isFinite(shiftSeconds) ? clamp(shiftSeconds, SHIFT.shortestSeconds, PLAY.daySeconds) : PLAY.daySeconds;
     this.shiftLength = Math.round(seconds * TICKS_PER_SECOND);
+    const night = Number.isFinite(nightSeconds)
+      ? clamp(nightSeconds, CAMPAIGN.nightMinimumSeconds, CAMPAIGN.nightSeconds) : CAMPAIGN.nightSeconds;
+    this.nightLength = Math.round(night * TICKS_PER_SECOND);
     this.shiftEnd = this.shiftLength;
     this.world.timestep = STEP_SECONDS;
 
@@ -247,6 +273,7 @@ class IslandSimulation {
   }
 
   step(input: SimInput, overrides: Readonly<Record<string, SimInput>> = {}) {
+    if (this.phase === 'cleared') return;
     const controls = this.actors.map((actor, index) =>
       overrides[actor.id] ?? (index === 0 && !actor.bot ? input : undefined));
     for (const [index, actor] of this.actors.entries()) {
@@ -265,13 +292,21 @@ class IslandSimulation {
     this.tick += 1;
     for (const [index, actor] of this.actors.entries()) {
       if (actor.recoverTick !== 0 && this.tick >= actor.recoverTick) this.recover(actor);
-      if (actor.ragdoll.length) continue;
       const actorInput = inputs[index];
+      if (actor.ghostPosition) {
+        this.moveGhost(actor, actor.ghostPosition, actorInput);
+        if (actorInput.swingPressed) this.prank(actor, actor.ghostPosition);
+        if (actorInput.revivePressed) this.payRevive(actor);
+        continue;
+      }
+      if (actor.ragdoll.length) continue;
       this.updatePlayer(actor, actorInput);
       if (actor.baitedBy) continue;
-      this.updateCastInput(actor, actorInput);
+      if (this.phase === 'day') this.updateCastInput(actor, actorInput);
       if (actorInput.swingPressed) this.swing(actor);
       if (actorInput.interactPressed) this.interact(actor);
+      if (actorInput.build) this.build(actor, actorInput.build);
+      if (actorInput.revivePressed) this.payRevive(actor);
     }
 
     for (const actor of this.actors) {
@@ -282,7 +317,10 @@ class IslandSimulation {
     this.world.step();
     for (const actor of this.actors) this.updateFlyingHook(actor);
     this.updateOutcomes();
-    if (this.tick >= this.shiftEnd) this.settleShift();
+    if (this.phase === 'night' || this.phase === 'boss') this.updateDefense();
+    if (this.phase === 'day' && this.tick >= this.shiftEnd) this.startNight();
+    else if (this.phase === 'night' && this.tick >= this.shiftEnd) this.settleShift();
+    else if (this.phase === 'boss' && this.defense.bossDefeated) this.phase = 'cleared';
   }
 
   snapshot(): SimSnapshot {
@@ -297,7 +335,7 @@ class IslandSimulation {
       player,
       players,
       hook: player.hook,
-      shiftRemaining: (this.shiftEnd - this.tick) * STEP_SECONDS,
+      shiftRemaining: this.phaseRemaining,
       shiftPaused: this.shiftPaused,
       teamRevenue: players.reduce((sum, worker) => sum + worker.shiftCash, 0),
       teamTarget: this.teamTarget,
@@ -307,6 +345,7 @@ class IslandSimulation {
         fishIncidents: this.affectedFish.size,
       },
       result: this.result && { ...this.result, ranking: this.result.ranking.map((entry) => ({ ...entry })) },
+      campaign: this.viewCampaign(),
       boss: {
         line: this.bossLine && this.bossLine.day === this.day ? { ...this.bossLine } : null,
         interview: this.bossInterview && this.bossInterview.day === this.day ? { ...this.bossInterview } : null,
@@ -338,6 +377,37 @@ class IslandSimulation {
 
   private get time() {
     return this.tick * STEP_SECONDS;
+  }
+
+  private get phaseRemaining() {
+    return this.phase === 'day' || this.phase === 'night' ? Math.max(0, this.shiftEnd - this.tick) * STEP_SECONDS : 0;
+  }
+
+  private get cycleLastDay() {
+    return Math.ceil(this.day / CAMPAIGN.cycleDays) * CAMPAIGN.cycleDays;
+  }
+
+  private viewCampaign(): CampaignView {
+    return {
+      phase: this.phase,
+      remaining: this.phaseRemaining,
+      ...this.defense.snapshot(),
+      warehouse: {
+        position: { ...CAMPAIGN.warehouse },
+        stock: this.warehouseLots.length,
+        value: this.warehouseValue,
+        lostFish: this.warehouseLostFish,
+        lostValue: this.warehouseLostValue,
+      },
+      cycle: {
+        firstDay: this.cycleFirstDay,
+        lastDay: this.cycleLastDay,
+        secured: this.warehouseValue,
+        target: this.cycleTarget + (this.shiftPaused || this.phase === 'boss' || this.phase === 'cleared' ? 0 : this.teamTarget),
+      },
+      lastCycle: this.lastCycle && { ...this.lastCycle, eaten: this.lastCycle.eaten && { ...this.lastCycle.eaten } },
+      reviveCost: CAMPAIGN.reviveCost,
+    };
   }
 
   private get teamTarget() {
@@ -456,7 +526,7 @@ class IslandSimulation {
         };
       }
       case 'set_kpi': {
-        if (target !== null || this.shiftPaused) return rejected();
+        if (target !== null || this.phase !== 'day') return rejected();
         const min = Math.ceil(this.baseTeamTarget * BOSS.kpiRange[0]);
         const max = Math.floor(this.baseTeamTarget * BOSS.kpiRange[1]);
         this.bossKpi = clamp(Math.round(amount), min, max);
@@ -482,7 +552,8 @@ class IslandSimulation {
         actor.giftedBait = true;
         return { ...response, amount: 1, effect: `${actor.name}获得一份加急鱼饵` };
       case 'eat_player':
-        if (!actor || this.shiftPaused || actor.ragdoll.length || actor.lastSwallowedDay === this.day || amount < 0.5) {
+        if (!actor || this.shiftPaused || actor.ghostPosition || actor.ragdoll.length
+          || actor.lastSwallowedDay === this.day || amount < 0.5) {
           return rejected();
         }
         this.startRagdoll(actor, null, launchVector(actor.body.translation(), BOSS.swallowLanding, BOSS.swallowFlightSeconds));
@@ -496,7 +567,8 @@ class IslandSimulation {
 
   private spawnBossCrates(wanted: number) {
     const available = BOSS.rewardCrates.filter((position) =>
-      !this.actors.some((worker) => distance(worker.ragdoll[0]?.body.translation() ?? worker.body.translation(), position) < 1.3)
+      !this.actors.some((worker) => !worker.ghostPosition
+        && distance(worker.ragdoll[0]?.body.translation() ?? worker.body.translation(), position) < 1.3)
       && !this.crates.some(({ body }) => distance(body.translation(), position) < 1),
     );
     const amount = Math.min(wanted, available.length, BOSS.rewardCrates.length - this.rewardCrates);
@@ -523,6 +595,7 @@ class IslandSimulation {
       ragdoll: [], recoverTick: 0, nextTripAt: 0, carrying: null, hook: newHook(),
       baitedBy: null, cash: 0, sold: 0, shiftCash: 0, shiftSold: 0, metrics: newActorMetrics(), optimization: false,
       shiftBossBonus: 0, shiftBossFine: 0, favor: 0, memory: [], giftedBait: false, swallowed: false, lastSwallowedDay: 0,
+      cycleCash: 0, cycleSold: 0, ghostPosition: null, ghostVelocity: { x: 0, y: 0, z: 0 }, nextPrankAt: 0, revivePaid: 0,
     };
   }
 
@@ -531,13 +604,16 @@ class IslandSimulation {
     const { fishIncidents, ...metrics } = actor.metrics;
     const body = ragdoll[0]?.body ?? actor.body;
     const hook = actor.hook;
-    const velocity = body.linvel();
+    const ghost = actor.ghostPosition !== null;
+    const velocity = ghost ? { ...actor.ghostVelocity } : body.linvel();
     const speed = ragdoll.length ? 0 : Math.hypot(velocity.x, velocity.z);
     const target: HookView['target'] = hook.bait ? 'player' : hook.target ? (isFish(hook.target) ? 'fish' : 'crate') : null;
     return {
-      ...pose(body),
       id, roleId, name, bot, cash, sold, shiftCash, shiftSold, optimization, yaw,
       animation: this.animationFor(actor, speed),
+      position: actor.ghostPosition ? { ...actor.ghostPosition } : body.translation(),
+      ghost,
+      revivePaid: actor.revivePaid,
       favor: actor.favor,
       memory: actor.memory.join('，'),
       giftedBait: actor.giftedBait,
@@ -546,7 +622,7 @@ class IslandSimulation {
       rotation: ragdoll.length ? body.rotation() : yawRotation(yaw),
       velocity,
       speed,
-      grounded: actor.groundContact && !ragdoll.length,
+      grounded: !ghost && actor.groundContact && !ragdoll.length,
       swing: clamp((actor.swingUntil - this.time) / PLAY.swingSeconds, 0, 1),
       ragdoll: actor.recoverTick ? (actor.recoverTick - this.tick) * STEP_SECONDS : 0,
       parts: ragdoll.map(({ limb, body }) => ({ limb, ...pose(body) })),
@@ -575,7 +651,50 @@ class IslandSimulation {
     return speed >= WORKER_MOTION.walkSpeed ? 'walk' : 'idle';
   }
 
+  private startNight() {
+    this.phase = 'night';
+    this.shiftEnd = this.tick + this.nightLength;
+    this.defense.startNight(this.day, this.time);
+    for (const actor of this.actors) {
+      if (actor.hook.phase !== 'idle') this.clearHook(actor);
+      this.announce(actor, '天黑了！海怪盯上了仓库', 'bad');
+    }
+  }
+
+  private updateDefense() {
+    const workers = this.actors
+      .filter((worker) => !worker.ghostPosition && !worker.ragdoll.length)
+      .map(({ id, body }) => ({ id, position: body.translation() }));
+    const events = this.defense.step(this.time, workers, this.warehouseLots.length);
+    let stolen = 0;
+    let lostValue = 0;
+    for (const event of events) {
+      if (event.kind === 'raid') {
+        const lots = this.warehouseLots.splice(0, event.count);
+        stolen += lots.length;
+        lostValue += lots.reduce((sum, amount) => sum + amount, 0);
+      } else {
+        const actor = this.actors.find(({ id }) => id === event.actorId);
+        if (!actor) continue;
+        this.startRagdoll(actor, event.source, event.force);
+        this.announce(actor, this.phase === 'boss' ? '螃蟹请你吃了一钳！' : '海怪把你撞翻了！', 'bad');
+      }
+    }
+    if (!stolen) return;
+    this.warehouseValue -= lostValue;
+    this.warehouseLostFish += stolen;
+    this.warehouseLostValue += lostValue;
+    for (const actor of this.actors) this.announce(actor, `海怪抢走了 ${stolen} 条鱼 · 指标少了 ¥${lostValue}`, 'bad');
+  }
+
+  private build(actor: Actor, kind: BuildKind) {
+    const point = buildAhead(actor.body.translation(), actor.yaw);
+    if (!this.defense.build(kind, point)) this.announce(actor, '这里放不下，或漂流木不够', 'bad');
+  }
+
   private settleShift() {
+    this.defense.endNight();
+    this.cycleTarget += this.teamTarget;
     // Array sort is stable, so ties on both values use the crew’s joining order.
     const ordered = [...this.actors].sort((a, b) => b.shiftCash - a.shiftCash || b.shiftSold - a.shiftSold);
     this.result = {
@@ -593,10 +712,27 @@ class IslandSimulation {
       actor.cash = Math.max(0, actor.cash + bonus - fine);
     }
     this.shiftPaused = true;
-    this.requestBoss('shift_end', this.actors[0], '白班交班，排名已结算');
+    if (this.day === this.cycleLastDay) {
+      const passed = this.warehouseValue >= this.cycleTarget;
+      const lowest = passed ? null : this.actors.filter((actor) => !actor.ghostPosition)
+        .sort((a, b) => b.cycleCash - a.cycleCash || b.cycleSold - a.cycleSold).at(-1);
+      this.lastCycle = {
+        day: this.day, secured: this.warehouseValue, target: this.cycleTarget, passed,
+        eaten: lowest ? { id: lowest.id, name: lowest.name } : null,
+      };
+    }
+    this.requestBoss('shift_end', this.actors[0], '今天交班，排名已结算');
   }
 
   private startNextShift() {
+    const ending = this.lastCycle?.day === this.day ? this.lastCycle : null;
+    if (ending?.passed) {
+      this.phase = 'boss';
+      this.shiftPaused = false;
+      this.notices.clear();
+      this.defense.startBoss(this.time);
+      return;
+    }
     const lowest = this.result?.ranking.at(-1)?.id;
     for (const actor of this.actors) {
       actor.optimization = actor.id === lowest;
@@ -613,11 +749,25 @@ class IslandSimulation {
     this.affectedFish.clear();
     this.notices.clear();
     this.day += 1;
+    this.phase = 'day';
     this.shiftEnd = this.tick + this.shiftLength;
     this.shiftPaused = false;
     this.bossKpi = null;
     this.salePricePercent = 100;
     this.boss.startDay(this.day);
+    if (ending) {
+      this.cycleFirstDay = this.day;
+      this.cycleTarget = 0;
+      this.warehouseLots.length = 0;
+      this.warehouseValue = 0;
+      this.warehouseLostFish = 0;
+      this.warehouseLostValue = 0;
+      for (const actor of this.actors) {
+        actor.cycleCash = 0;
+        actor.cycleSold = 0;
+        if (actor.id === ending.eaten?.id) this.becomeGhost(actor);
+      }
+    }
     this.requestBoss('shift_start', null, '新一班开工');
   }
 
@@ -649,6 +799,111 @@ class IslandSimulation {
     actor.moveSpeed = movement.desiredSpeed;
     actor.body.setLinvel(movement.velocity, true);
     if (movement.jumped) actor.groundContact = false;
+  }
+
+  private becomeGhost(actor: Actor) {
+    if (actor.baitedBy) this.clearHook(actor.baitedBy);
+    this.clearHook(actor);
+    if (actor.carrying) this.throwCarried(actor, { x: 0, y: 0.85, z: 0 });
+    for (const { body } of actor.ragdoll) this.world.removeRigidBody(body);
+    actor.ragdoll = [];
+    actor.recoverTick = 0;
+    actor.swallowed = false;
+    actor.body.setEnabled(false);
+    actor.ghostPosition = { ...actor.spawn, y: CAMPAIGN.ghostHover };
+    actor.ghostVelocity = { x: 0, y: 0, z: 0 };
+    actor.nextPrankAt = this.time;
+    actor.revivePaid = 0;
+    this.remember(actor, '三天欠账，被吞成幽灵');
+    this.announce(actor, `变成幽灵了！F 捣乱 · R 凑够 ¥${CAMPAIGN.reviveCost} 复活`, 'bad');
+    this.requestBoss('death', actor, `${actor.name}没交够三天指标，被吃成幽灵`);
+  }
+
+  private moveGhost(actor: Actor, position: Vec3, input: SimInput) {
+    const inset = CAMPAIGN.ghostBoundsInset;
+    const length = Math.max(1, Math.hypot(input.moveX, input.moveZ));
+    const step = CAMPAIGN.ghostSpeed * STEP_SECONDS / length;
+    const x = clamp(position.x + input.moveX * step, ISLAND.minX + inset, ISLAND.maxX - inset);
+    const z = clamp(position.z + input.moveZ * step, ISLAND.shoreZ + inset, ISLAND.backZ - inset);
+    const y = CAMPAIGN.ghostHover + Math.sin(this.time * CAMPAIGN.ghostBobRate) * CAMPAIGN.ghostBobAmplitude;
+    actor.ghostVelocity = {
+      x: (x - position.x) / STEP_SECONDS,
+      y: (y - position.y) / STEP_SECONDS,
+      z: (z - position.z) / STEP_SECONDS,
+    };
+    Object.assign(position, { x, y, z });
+    const focus = input.aim ? { x: input.aim.x - x, z: input.aim.z - z } : { x: input.moveX, z: input.moveZ };
+    if (Math.hypot(focus.x, focus.z) > 0.05) actor.yaw = Math.atan2(-focus.x, -focus.z);
+  }
+
+  private prank(actor: Actor, position: Vec3) {
+    if (this.time < actor.nextPrankAt) return;
+    const target = this.actors.filter((worker) => !worker.ghostPosition && !worker.ragdoll.length && this.time >= worker.nextTripAt)
+      .map((worker) => ({ worker, separation: distance(position, worker.body.translation()) }))
+      .sort((a, b) => a.separation - b.separation)[0];
+    if (!target || target.separation > CAMPAIGN.ghostPrankReach) return;
+    actor.nextPrankAt = this.time + CAMPAIGN.ghostPrankCooldown;
+    actor.swingUntil = this.time + PLAY.swingSeconds;
+    this.startRagdoll(target.worker, position);
+    this.observeCrew('friendly_hit', actor, target.worker, `${actor.name}闹鬼拍飞了${target.worker.name}`);
+    this.announce(actor, `闹鬼成功！${target.worker.name}摔了个屁股蹲`, 'good');
+    this.announce(target.worker, `${actor.name}从幽灵工位伸来一脚！`, 'bad');
+  }
+
+  private payRevive(payer: Actor) {
+    const position = payer.body.translation();
+    const ghost = payer.ghostPosition ? payer : this.actors.flatMap((worker) => {
+      if (!worker.ghostPosition) return [];
+      const separation = distance(position, worker.ghostPosition);
+      return separation <= CAMPAIGN.reviveReach ? [{ worker, separation }] : [];
+    }).sort((a, b) => a.separation - b.separation)[0]?.worker;
+    if (!ghost?.ghostPosition) return;
+
+    const remaining = CAMPAIGN.reviveCost - ghost.revivePaid;
+    // In an all-ghost crew, active humans need a way to earn income again.
+    const emergency = !payer.bot && payer.cash < remaining && this.actors.every((worker) => worker.ghostPosition)
+      && !this.actors.some((worker) => !worker.bot && worker.cash >= CAMPAIGN.reviveCost - worker.revivePaid);
+    const advance = emergency ? remaining - payer.cash : 0;
+    const installment = Math.min(remaining, CAMPAIGN.reviveContribution);
+    const paid = emergency ? remaining : Math.min(payer.cash, installment);
+    const donated = payer === ghost && paid < installment
+      ? this.requestBotDonation(ghost.ghostPosition, installment - paid)
+      : 0;
+    const totalPaid = paid + donated;
+    if (totalPaid <= 0) {
+      this.announce(payer, payer === ghost ? '没凑够复活费，靠近有鱼款的机器人求助' : '手头没钱，复活费还没凑够', 'bad');
+      return;
+    }
+    payer.cash += advance - paid;
+    ghost.revivePaid += totalPaid;
+    const paidText = `${ghost.name}的复活费 ¥${ghost.revivePaid}/${CAMPAIGN.reviveCost}`;
+    if (ghost.revivePaid < CAMPAIGN.reviveCost) {
+      this.announce(payer, donated ? `工友出了 ¥${donated} · ${paidText}` : paidText, 'good');
+      if (payer !== ghost) this.announce(ghost, `${payer.name}捎来 ¥${paid} · ${paidText}`, 'good');
+      return;
+    }
+
+    const { x, z } = ghost.ghostPosition;
+    ghost.ghostPosition = null;
+    ghost.revivePaid = 0;
+    ghost.body.setTranslation({ x, y: ISLAND.spawn.y, z }, true);
+    ghost.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    ghost.body.setEnabled(true);
+    ghost.nextTripAt = this.time + 0.9;
+    this.announce(ghost, advance ? `老板垫了 ¥${advance}，肉身返岗！` : '欠款补齐，肉身返岗！', 'good');
+    if (payer !== ghost) this.announce(payer, `你帮${ghost.name}凑齐了复活费！`, 'good');
+  }
+
+  private requestBotDonation(position: Vec3, limit: number) {
+    const donor = this.actors.flatMap((worker) => {
+      if (!worker.bot || worker.ghostPosition || worker.cash <= 0) return [];
+      const separation = distance(position, worker.body.translation());
+      return separation <= CAMPAIGN.reviveReach ? [{ worker, separation }] : [];
+    }).sort((a, b) => a.separation - b.separation)[0]?.worker;
+    if (!donor) return 0;
+    const amount = Math.min(donor.cash, limit);
+    donor.cash -= amount;
+    return amount;
   }
 
   private updateCastInput(actor: Actor, input: SimInput) {
@@ -770,7 +1025,7 @@ class IslandSimulation {
     const position = hook.body.translation();
     const falling = hook.body.linvel().y <= 0;
     const teammate = falling && this.actors.find((other) => {
-      if (other === actor || other.baitedBy || other.ragdoll.length) return false;
+      if (other === actor || other.ghostPosition || other.baitedBy || other.ragdoll.length) return false;
       const point = other.body.translation();
       return distance(position, point) < FISHING.teammateHookRadius && Math.abs(position.y - point.y) < 0.7;
     });
@@ -958,6 +1213,7 @@ class IslandSimulation {
     if (this.time < actor.swingUntil || actor.carrying) return;
     actor.swingUntil = this.time + PLAY.swingSeconds;
     const position = actor.body.translation();
+    if ((this.phase === 'night' || this.phase === 'boss') && this.defense.hit(position, actor.aim)) return;
     let hit: Fish | undefined;
     let reach: number = PLAY.swingReach;
     for (const fish of this.fish) {
@@ -972,7 +1228,7 @@ class IslandSimulation {
     }
     let teammate: Actor | null = null;
     for (const other of this.actors) {
-      if (other === actor || other.ragdoll.length || this.time < other.nextTripAt) continue;
+      if (other === actor || other.ghostPosition || other.ragdoll.length || this.time < other.nextTripAt) continue;
       const point = other.body.translation();
       const radius = distance(position, point);
       const dot = (point.x - position.x) * actor.aim.x + (point.z - position.z) * actor.aim.z;
@@ -1170,6 +1426,12 @@ class IslandSimulation {
           worker.sold += 1;
           worker.shiftCash += amount;
           worker.shiftSold += 1;
+          if (this.phase !== 'boss') {
+            worker.cycleCash += amount;
+            worker.cycleSold += 1;
+            this.warehouseLots.push(amount);
+            this.warehouseValue += amount;
+          }
           const bait = fish.baitPlayerId ? ` · 活饵 ×${baitMultiplier}` : '';
           this.announce(worker, `入账 ¥${amount} · ${FISH[fish.kind].name} ×${fish.multiplier.toFixed(2)}${bait}`, 'good');
           this.requestBoss('sale', worker, `${worker.name}卖出${FISH[fish.kind].name}`, amount);
@@ -1196,7 +1458,7 @@ class IslandSimulation {
     }
 
     for (const actor of this.actors) {
-      if (!actor.ragdoll.length && actor.body.translation().y < ISLAND.seaY - 0.27) {
+      if (!actor.ghostPosition && !actor.ragdoll.length && actor.body.translation().y < ISLAND.seaY - 0.27) {
         this.startRagdoll(actor, null);
         this.announce(actor, '落水工伤，海浪马上送你回来', 'bad', 'water_fall');
         this.remember(actor, '落水过一次');
@@ -1221,7 +1483,7 @@ class IslandSimulation {
     }
     const thrownInto = crate.state === 'thrown' && Math.hypot(velocity.x, velocity.y, velocity.z) > 2.8;
     for (const actor of this.actors) {
-      if (actor.ragdoll.length || this.time < actor.nextTripAt) continue;
+      if (actor.ghostPosition || actor.ragdoll.length || this.time < actor.nextTripAt) continue;
       const player = actor.body.translation();
       const playerVelocity = actor.body.linvel();
       const runningInto = actor.moveSpeed >= PLAY.crateTripSpeed
@@ -1241,7 +1503,7 @@ class IslandSimulation {
   }
 
   private startRagdoll(actor: Actor, source: Vec3 | null, force?: Vec3) {
-    if (actor.ragdoll.length) return;
+    if (actor.ghostPosition || actor.ragdoll.length) return;
     actor.metrics.knockdowns += 1;
     this.clearHook(actor);
     actor.groundContact = false;

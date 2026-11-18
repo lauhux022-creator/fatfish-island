@@ -4,13 +4,14 @@ import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 import type { WorkerRoleId } from '../../shared/sim/cast';
 import { PLAY } from '../../shared/sim/config';
 import claudeUrl from '../../assets/dafeiyu/models/claude.glb?url';
+import crabUrl from '../../assets/dafeiyu/models/crab.glb?url';
 import feiyuUrl from '../../assets/dafeiyu/models/feiyu.glb?url';
 import gptUrl from '../../assets/dafeiyu/models/gpt.glb?url';
 import grokUrl from '../../assets/dafeiyu/models/grok.glb?url';
 import kimiUrl from '../../assets/dafeiyu/models/kimi.glb?url';
 
-const urls = { claude: claudeUrl, feiyu: feiyuUrl, gpt: gptUrl, grok: grokUrl, kimi: kimiUrl };
-export type CharacterAsset = WorkerRoleId | 'feiyu';
+const urls = { claude: claudeUrl, crab: crabUrl, feiyu: feiyuUrl, gpt: gptUrl, grok: grokUrl, kimi: kimiUrl };
+export type CharacterAsset = WorkerRoleId | 'feiyu' | 'crab';
 
 interface CharacterTemplate {
   scene: T.Group;
@@ -95,9 +96,9 @@ export function makeActor(parent: T.Object3D, assets: ActorAssets, height: numbe
   let hand: T.Object3D | undefined;
 
   function detach() {
-    if (instance && mixer) {
-      mixer.stopAllAction();
-      mixer.uncacheRoot(instance);
+    if (instance) {
+      mixer?.stopAllAction();
+      mixer?.uncacheRoot(instance);
       instance.removeFromParent();
       const skeletons = new Set<T.Skeleton>();
       instance.traverse(node => {
@@ -122,7 +123,7 @@ export function makeActor(parent: T.Object3D, assets: ActorAssets, height: numbe
     void request.then(template => {
       if (!template || ticket !== sequence) return;
       look = template;
-      const object = cloneSkeleton(template.scene);
+      const object = template.clips.size > 0 ? cloneSkeleton(template.scene) : template.scene.clone();
       const { min, max } = template.bounds;
       const scale = height / Math.max(0.01, max.y - min.y);
       object.scale.setScalar(scale);
@@ -138,8 +139,10 @@ export function makeActor(parent: T.Object3D, assets: ActorAssets, height: numbe
       });
       pivot.add(object);
       instance = object;
-      mixer = new T.AnimationMixer(object);
-      play('idle', 0);
+      if (template.clips.size > 0) {
+        mixer = new T.AnimationMixer(object);
+        play('idle', 0);
+      }
     });
   }
 

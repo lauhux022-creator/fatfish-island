@@ -6,6 +6,7 @@ import { chromium } from 'playwright-core';
 const base = new URL(process.env.GAME_URL || 'http://127.0.0.1:5173/fatfish-island/');
 const photos = process.env.SCREENSHOT_DIR;
 const pagesOnly = process.env.PAGES_ONLY === '1';
+const readyTimeout = Number(process.env.BROWSER_READY_TIMEOUT_MS ?? 30_000);
 const browser = await chromium.launch({
   channel: process.env.CHROME_PATH ? undefined : 'chrome',
   executablePath: process.env.CHROME_PATH,
@@ -51,14 +52,14 @@ async function boot({ role = 'gpt', day = 3, seconds = 30 } = {}) {
     if (new URL(socket.url()).pathname.endsWith('/rooms')) rooms++;
   });
   const url = new URL(base);
-  url.search = new URLSearchParams({ debug: '1', seed: 'm4.5-crew', day, role, shiftSeconds: seconds });
+  url.search = new URLSearchParams({ debug: '1', seed: 'm4.5-crew', day, role, shiftSeconds: seconds, nightSeconds: 8 });
   const started = performance.now();
-  const response = await page.goto(url.href, { waitUntil: 'commit', timeout: 30_000 });
+  const response = await page.goto(url.href, { waitUntil: 'commit', timeout: readyTimeout });
   assert.equal(response?.status(), 200);
   await wait(page, (role) => {
     const local = window.fatfishDebug?.snapshot();
     return local?.tick > 2 && local.player.roleId === role;
-  }, role, 25_000);
+  }, role, readyTimeout);
   const ready = (performance.now() - started) / 1000;
   if (process.env.CHECK_STARTUP === '1') assert(ready < 5, `Startup took ${ready.toFixed(2)}s`);
   assert.equal(rooms, 0, 'local preview must not connect to a room');
@@ -73,7 +74,7 @@ async function waitForCast(page) {
     const model = document.querySelector('canvas');
     const have = new Set(model?.dataset.loadedRoles?.split(','));
     return model?.dataset.bossModel === 'feiyu' && ['claude', 'gpt', 'grok', 'kimi'].every((id) => have.has(id));
-  }, null, 45_000);
+  }, null, readyTimeout + 15_000);
 }
 
 function distance(a, b) {
@@ -114,15 +115,10 @@ async function paddleFriend(page) {
 }
 
 async function local() {
-  const { page, context, models, ready } = await boot();
-  assert.equal(await page.locator('[data-version]').textContent(), '0.4.5');
-  await waitForCast(page);
-  assert.deepEqual(new Set(models.slice(0, 2)), new Set(['feiyu', 'gpt']));
-  await wait(page, () => {
-    const bust = document.querySelector('img[data-boss-portrait]');
-    return bust?.naturalWidth > 0;
-  });
-  console.log(`可操作 ${ready.toFixed(2)} 秒，首批模型 ${models.slice(0, 2).join(' + ')}，四名角色及老板加载成功。`);
+  const { page, context, models, ready } = await boot({ seconds: pagesOnly ? 240 : 30 });
+  const version = await page.locator('[data-version]').textContent();
+  assert.match(version, /^\d+\.\d+\.\d+$/);
+  if (process.env.EXPECTED_VERSION) assert.equal(version, process.env.EXPECTED_VERSION);
   if (pagesOnly) {
     await page.keyboard.down('KeyD');
     try {
@@ -130,8 +126,15 @@ async function local() {
     } finally {
       await page.keyboard.up('KeyD');
     }
-    return context.close();
   }
+  await waitForCast(page);
+  assert.deepEqual(new Set(models.slice(0, 2)), new Set(['feiyu', 'gpt']));
+  await wait(page, () => {
+    const bust = document.querySelector('img[data-boss-portrait]');
+    return bust?.naturalWidth > 0;
+  });
+  console.log(`可操作 ${ready.toFixed(2)} 秒，首批模型 ${models.slice(0, 2).join(' + ')}，四名角色及老板加载成功。`);
+  if (pagesOnly) return context.close();
 
   await shot(page, '01-boss');
   await page.locator('[data-role-toggle]').click();
@@ -146,7 +149,7 @@ async function local() {
   await wait(page, () => window.fatfishDebug.snapshot().players.some(
     ({ bot, ragdoll }) => bot && ragdoll > 1.1 && ragdoll < 1.75));
   await shot(page, '03-paddle');
-  await wait(page, () => window.fatfishDebug.snapshot().shiftPaused, null, 45_000);
+  await wait(page, () => window.fatfishDebug.snapshot().shiftPaused, null, 65_000);
   await wait(page, () => window.fatfishDebug.snapshot().boss.interview?.trigger === 'shift_end');
   await wait(page, () => [...document.querySelectorAll('.shift-interview img')].every(
     (image) => !image.hidden && image.naturalWidth > 0));

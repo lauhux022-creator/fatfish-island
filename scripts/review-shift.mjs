@@ -25,7 +25,6 @@ function summarize(state) {
     fish: state.metrics,
     workers: state.players.map(({ id, name, shiftCash, shiftSold, metrics }) =>
       ({ id, name, cash: shiftCash, sold: shiftSold, ...metrics })),
-    ranking: state.result?.ranking,
   };
 }
 
@@ -52,13 +51,15 @@ try {
   let nextLog = 30;
   let state = await snapshot();
   const start = Date.now();
-  while (!state.shiftPaused && state.time < 241) {
+  // The original review measures only the daylight shift. The smoke test checks
+  // ranking bonuses and fines after the night has finished.
+  while (state.campaign.phase === 'day' && state.time < 241) {
     if (Date.now() - start > 12 * 60 * 1000) throw new Error('未能在 12 分钟内完成 240 模拟秒');
     await controls.apply(state, plan(state));
     if (realtime) {
       await page.waitForFunction((tick) => {
         const next = window.fatfishDebug.snapshot();
-        return next.shiftPaused || next.tick >= tick + 5;
+        return next.campaign.phase !== 'day' || next.tick >= tick + 5;
       }, state.tick, { timeout: 8000 });
     } else {
       await page.clock.runFor(100);
@@ -71,14 +72,10 @@ try {
   }
   await controls.stop();
   assert.equal(state.day, 3);
-  assert.equal(state.time, 240);
-  assert.equal(state.shiftPaused, true);
-  assert.equal(state.result?.ranking.length, 4);
-  const winner = state.result.ranking[0];
-  const lowest = state.result.ranking.at(-1);
-  assert.equal(winner.bonus, Math.round(winner.revenue * 0.25));
-  assert.equal(lowest.fine, Math.round(lowest.revenue * 0.2));
-  console.log('M2.5 full shift', JSON.stringify(summarize(state)));
+  assert(state.time >= 240 && state.time < 241);
+  assert.equal(state.campaign.phase, 'night');
+  assert.equal(state.shiftPaused, false);
+  console.log('M2.5 daylight shift', JSON.stringify(summarize(state)));
   assert(state.player.metrics.interference >= 4, '玩家实际被干扰至少 4 次');
   assert(state.metrics.fishIncidents >= 2, '至少 2 条不同的鱼逃跑或易手');
   assert(state.player.shiftSold >= 8 && state.player.shiftSold <= 12, '熟练玩家目标为 8–12 尾');

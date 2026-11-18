@@ -1,12 +1,13 @@
 import type { IncomingMessage } from 'node:http';
 import { ROOM_CODE_PATTERN, ROOM_MAX_NAME, type RoomClientMessage } from '../shared/net/types';
+import { BUILD_KINDS, type BuildKind } from '../shared/sim/campaign-types';
 import { isWorkerRoleId } from '../shared/sim/cast';
-import { PLAY, SHIFT } from '../shared/sim/config';
+import { CAMPAIGN, PLAY, SHIFT } from '../shared/sim/config';
 import type { SimInput } from '../shared/sim/types';
 
 const TOKEN_PATTERN = /^[\w-]{24}$/;
 const INPUT_FLAGS = [
-  'castHeld', 'castPressed', 'castReleased', 'swingPressed', 'interactPressed', 'jumpPressed', 'continuePressed',
+  'castHeld', 'castPressed', 'castReleased', 'swingPressed', 'interactPressed', 'jumpPressed', 'continuePressed', 'revivePressed',
 ] as const;
 const loopback = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -31,6 +32,7 @@ function parseInput(value: unknown): SimInput | null {
   const aim = value.aim;
   if (aim !== null && (!record(aim) || !finite(aim.x) || !finite(aim.z))) return null;
   if (INPUT_FLAGS.some((flag) => value[flag] !== undefined && typeof value[flag] !== 'boolean')) return null;
+  if (value.build !== undefined && !BUILD_KINDS.includes(value.build as BuildKind)) return null;
   if (value.chat !== undefined && typeof value.chat !== 'string') return null;
   const input: SimInput = {
     moveX: clamp(value.moveX, 1),
@@ -43,6 +45,8 @@ function parseInput(value: unknown): SimInput | null {
     interactPressed: value.interactPressed === true,
     jumpPressed: value.jumpPressed === true,
     continuePressed: value.continuePressed === true,
+    revivePressed: value.revivePressed === true,
+    build: value.build as BuildKind | undefined,
   };
   if (typeof value.chat === 'string') input.chat = normalize(value.chat, 120);
   return input;
@@ -63,6 +67,7 @@ export function readRoomMessage(data: string): RoomClientMessage | null {
       if (value.seed !== undefined && typeof value.seed !== 'string') return null;
       if (value.day !== undefined && !Number.isSafeInteger(value.day)) return null;
       if (value.shiftSeconds !== undefined && !finite(value.shiftSeconds)) return null;
+      if (value.nightSeconds !== undefined && !finite(value.nightSeconds)) return null;
       const seed = typeof value.seed === 'string' ? normalize(value.seed, 80) : undefined;
       return {
         type: 'create',
@@ -72,6 +77,8 @@ export function readRoomMessage(data: string): RoomClientMessage | null {
         day: value.day === undefined ? undefined : Math.max(1, Math.min(999, Number(value.day))),
         shiftSeconds: value.shiftSeconds === undefined ? undefined
           : Math.max(SHIFT.shortestSeconds, Math.min(PLAY.daySeconds, Number(value.shiftSeconds))),
+        nightSeconds: value.nightSeconds === undefined ? undefined
+          : Math.max(CAMPAIGN.nightMinimumSeconds, Math.min(CAMPAIGN.nightSeconds, Number(value.nightSeconds))),
       };
     }
     case 'join':

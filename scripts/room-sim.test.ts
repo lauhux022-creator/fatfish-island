@@ -36,10 +36,14 @@ test('each occupied seat receives only its own movement, and prediction reuses t
 });
 
 test('a guest can talk to the boss and resume settlement without borrowing the host identity', async () => {
-  const sim = await createSimulation({ shiftSeconds: 10 });
+  const sim = await createSimulation({ shiftSeconds: 10, nightSeconds: 8 });
   try {
     sim.setSeat('bot-1', '阿宁');
-    for (let tick = 0; tick <= 10 * TICKS_PER_SECOND; tick++) sim.step(emptyInput, stillBots);
+    for (let tick = 0; tick < 10 * TICKS_PER_SECOND; tick++) sim.step(emptyInput, stillBots);
+    const dusk = sim.snapshot();
+    assert.equal(dusk.campaign.phase, 'night');
+    assert(!dusk.shiftPaused);
+    for (let tick = 0; tick < 8 * TICKS_PER_SECOND; tick++) sim.step(emptyInput, stillBots);
     const paused = sim.snapshot();
     assert(paused.shiftPaused);
     sim.step(emptyInput, { ...stillBots, 'bot-1': { ...emptyInput, chat: '老板发个鱼饵' } });
@@ -56,6 +60,7 @@ test('a guest can talk to the boss and resume settlement without borrowing the h
     sim.step(emptyInput, { ...stillBots, 'bot-1': { ...emptyInput, continuePressed: true } });
     assert(!sim.snapshot().shiftPaused);
     assert.equal(sim.snapshot().day, paused.day + 1);
+    assert.equal(sim.snapshot().campaign.phase, 'day');
   } finally {
     sim.dispose();
   }

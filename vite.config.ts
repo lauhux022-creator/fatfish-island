@@ -53,7 +53,7 @@ function commitShortHash(): string {
   }
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
   const { PORT = '8797', ROOM_HOST: host = '127.0.0.1' } = loadEnv(mode, process.cwd(), ['PORT', 'ROOM_HOST']);
   const backendHost = ['0.0.0.0', '::'].includes(host) ? '127.0.0.1'
     : host.includes(':') ? `[${host}]` : host;
@@ -61,8 +61,9 @@ export default defineConfig(({ mode }) => {
   return {
     base: BASE,
     plugins: [preloadGame()],
-    resolve: { alias: { '@dimforge/rapier3d-compat': '@dimforge/rapier3d' } },
-    optimizeDeps: { exclude: ['@dimforge/rapier3d'] },
+    resolve: command === 'build'
+      ? { alias: { '@dimforge/rapier3d-compat': '@dimforge/rapier3d' } }
+      : undefined,
     server: { host, proxy },
     preview: { host, proxy },
     define: {

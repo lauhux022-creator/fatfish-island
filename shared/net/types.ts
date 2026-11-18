@@ -10,7 +10,10 @@ export type RoomBrain = 'mock' | 'deepseek';
 export type RoomErrorCode = 'invalid' | 'not_found' | 'full' | 'character_taken' | 'unavailable' | 'active_session' | 'forbidden';
 
 export type RoomClientMessage =
-  | { type: 'create'; name: string; roleId?: WorkerRoleId; seed?: string; day?: number; shiftSeconds?: number }
+  | {
+    type: 'create'; name: string; roleId?: WorkerRoleId; seed?: string; day?: number;
+    shiftSeconds?: number; nightSeconds?: number;
+  }
   | { type: 'join'; code: string; name: string; roleId?: WorkerRoleId }
   | { type: 'resume'; code: string; token: string }
   | { type: 'input'; seq: number; input: SimInput }

@@ -46,7 +46,6 @@ export const PLAY = {
   friendlyKnockback: 4.4,
   friendlyArc: 0.55,
   daySeconds: 240,
-  nightSeconds: 120,
 } as const;
 
 export const FISHING = {
@@ -108,9 +107,6 @@ export const BOSS = {
 
 export const TEAM_DAILY_KPI = [1350, 1425, 1500, 1575] as const;
 
-// Three-day settlement arrives in M5. Each cycle sums its three daily targets.
-export const TEAM_KPI = [4275, 4725, 4725, 4725] as const;
-
 export const BOTS = {
   laneZ: -1.45,
   crossing: { x: 2.95, z: 0.78 },
@@ -141,5 +137,78 @@ export const BOTS = {
     'bot-1': { station: 0, depthOffset: 0.07, drop: { x: 3.8, z: 0.35 }, start: 5.9, jumpChance: 0.16 },
     'bot-2': { station: 1, depthOffset: -0.48, drop: { x: 4.15, z: -0.18 }, start: 6.7, jumpChance: 0.40 },
     'bot-3': { station: 1, depthOffset: 0.62, drop: { x: 4.15, z: 1.15 }, start: 7.9, jumpChance: 0.22 },
+  },
+} as const;
+
+export const CAMPAIGN = {
+  nightSeconds: 120,
+  nightMinimumSeconds: 8,
+  cycleDays: 3,
+  warehouse: { x: 0, y: 0, z: 6.2 },
+  warehouseRadius: 1.4,
+  reviveCost: 80,
+  reviveContribution: 20,
+  reviveReach: 3.2,
+  ghostPrankCooldown: 2.6,
+  ghostPrankReach: 2.6,
+  ghostSpeed: 4.2,
+  ghostHover: 1.35,
+  ghostBoundsInset: 0.45,
+  ghostBobAmplitude: 0.12,
+  ghostBobRate: 3,
+  buildReach: 2.0,
+  maxStructures: 16,
+  buildGrid: 0.5,
+  buildSpacing: 1.15,
+  startingWood: 6,
+  tideWood: 6,
+  bossWood: 5,
+  maxWood: 14,
+  build: {
+    fence: { cost: 2, hp: 3, halfWidth: 0.875, halfDepth: 0.3 },
+    trap: { cost: 2, hp: 1, radius: 0.73, damage: 2, stunSeconds: 0.7 },
+    lure: { cost: 1, hp: 2, attractionReach: 4.8 },
+  },
+  raid: {
+    firstWaveSeconds: 0.4,
+    waveSeconds: 14,
+    spawnZ: -4.75,
+    lanes: [-4.7, 3.6, 0.6],
+    maxActive: 6,
+    hp: 2,
+    speed: 2.65,
+    steal: 2,
+    reach: 1.15,
+    strikeRadius: 1.15,
+    windupSeconds: 0.53,
+    recoverSeconds: 0.58,
+    staggerSeconds: 0.24,
+  },
+  crab: {
+    spawn: { x: 0, y: 0, z: -3.25 },
+    hp: 22,
+    speed: 1.65,
+    sizeReach: 0.5,
+    firstAttackSeconds: 2.25,
+    attackInterval: 2.1,
+    strikeReach: 3.35,
+    strikeRadius: 2.05,
+    windupSeconds: 0.95,
+    recoverSeconds: 1.6,
+    lateralGuard: 0.48,
+  },
+  guard: {
+    primaryRange: 3.65,
+    backupRange: 2.15,
+    patrols: {
+      player: { x: 0.2, z: 3.2 },
+      'bot-1': { x: -3.4, z: 2.2 },
+      'bot-2': { x: 3.6, z: 2.8 },
+      'bot-3': { x: 2.7, z: 4.5 },
+    },
+    strikeGap: 1.1,
+    raidStrikeGap: 1.35,
+    ghostStrikeGap: 4.5,
+    retreatPadding: 0.95,
   },
 } as const;

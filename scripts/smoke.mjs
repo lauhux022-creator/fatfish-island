@@ -58,15 +58,16 @@ async function visit(url) {
   assert.match(await page.title(), /大肥鱼的黑心渔场/);
 }
 
-async function openShift(shiftSeconds) {
+async function openShift({ shiftSeconds, nightSeconds, day = 3 } = {}) {
   const url = new URL(base);
-  url.search = new URLSearchParams({ seed: 'm2-review', day: '3', debug: '1' }).toString();
+  url.search = new URLSearchParams({ seed: 'm2-review', day: String(day), debug: '1' }).toString();
   if (shiftSeconds) url.searchParams.set('shiftSeconds', String(shiftSeconds));
+  if (nightSeconds) url.searchParams.set('nightSeconds', String(nightSeconds));
   await visit(url);
   await probe(() => window.fatfishDebug?.snapshot().tick > 5);
   const state = await read();
   assert.equal(state.seed, 'm2-review');
-  assert.equal(state.day, 3);
+  assert.equal(state.day, day);
   assert.equal(state.sold, 0);
   assert.equal(await page.locator('[data-debug]').isVisible(), true);
   assert.deepEqual(state.players.map(({ roleId, name }) => [roleId, name]), [
@@ -347,17 +348,19 @@ async function interceptThrow() {
 }
 
 async function botsAndStandings() {
-  await openShift(48);
+  await openShift({ shiftSeconds: 48, nightSeconds: 8, day: 2 });
   const standingsButton = page.getByRole('button', { name: '绩效榜' });
   await standingsButton.click();
   assert.equal(await page.locator('[data-standings] tbody tr').count(), 4);
   await standingsButton.click();
   assert.equal(await page.locator('[data-standings]').isVisible(), false);
-  await probe(() => window.fatfishDebug.snapshot().shiftPaused, null, 87000);
+  await probe(() => window.fatfishDebug.snapshot().campaign.phase === 'night', null, 87000);
+  assert.equal((await read()).shiftPaused, false);
+  await probe(() => window.fatfishDebug.snapshot().shiftPaused, null, 24000);
   const snapshot = await read();
   const champion = snapshot.result.ranking[0];
   const lowest = snapshot.result.ranking.at(-1);
-  assert.equal(snapshot.day, 3);
+  assert.equal(snapshot.day, 2);
   assert.equal(snapshot.result.ranking.length, 4);
   assert(champion.bot && champion.revenue > 0 && champion.bonus === Math.round(champion.revenue * 0.25));
   assert.equal(lowest.optimization, true);
@@ -368,8 +371,9 @@ async function botsAndStandings() {
   assert.equal((await read()).tick, snapshot.tick);
   await photo('05-standings');
   await page.keyboard.press('Enter');
-  await probe(() => !window.fatfishDebug.snapshot().shiftPaused && window.fatfishDebug.snapshot().day === 4);
+  await probe(() => !window.fatfishDebug.snapshot().shiftPaused && window.fatfishDebug.snapshot().day === 3);
   const resumed = await read();
+  assert.equal(resumed.campaign.phase, 'day');
   assert.equal(resumed.teamRevenue, 0);
   assert.equal(resumed.players.find(({ id }) => id === lowest.id).optimization, true);
   assert.equal(await page.locator('[data-standings]:modal').count(), 0);

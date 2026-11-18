@@ -2,7 +2,7 @@
 
 [在线试玩](https://lauhux022-creator.github.io/fatfish-island/) · [开发进度](docs/progress.md) · [数值与设计](docs/design.md)
 
-给大肥鱼打工。甩一竿，把想逃跑的鱼拍晕，再连人带桨冲到秤边交货。可以开房和 2–4 位真人上工，也可在浏览器里和机器人同班。Claude、GPT、Grok、Kimi 都是大肥鱼的打工人，会钓鱼、交鱼，也会抢鱼。大肥鱼会抬价、砍价和记仇。
+给大肥鱼打工。扮演 Claude、GPT、Grok 或 Kimi，白天交鱼，晚上守仓，三天交够指标就能挑战岛上的螃蟹。可以开房和 2–4 位真人上工，也可以直接在浏览器里和机器人同班。大肥鱼会抬价、砍价，也会记仇。
 
 ## 本地开工
 
@@ -39,14 +39,19 @@ npm run dev
 | 抢鱼 | 靠近并瞄准队友手中的鱼或半空中的鱼，按 E 截胡 |
 | 钩队友当饵 | 瞄准队友甩钩。钩中后朝海面点左键，甩出队友引来大鱼 |
 | 友伤 | 朝队友按 F 或鼠标右键，从近处一桨拍飞 |
+| 夜里建造 | 瞄准脚边地面，按 1 放围栏、2 下捕兽夹、3 挂诱饵筐。金圈可放，红圈表示位置受阻或木料不足 |
+| 守仓、打螃蟹 | F 挥桨，避开螃蟹落钳前的红圈，等它收钳时上去补桨 |
+| 幽灵作怪、还魂 | 幽灵靠近队友按 F 推倒对方。按 R 投钱还魂，活人可在幽灵旁按 R 帮付 |
 | 跟大肥鱼说话 | T 或屏幕上的「找老板」，Enter 发送 |
 | 静音 | M 或界面上的静音按钮 |
 
 触屏可点场景瞄准，使用屏幕方向键和动作按钮。被桨拍到或撞上岸上警示箱会摔成布娃娃，两秒后站起来。鱼款给最后有效碰鱼的人，被当饵的队友拿不到那条鱼的绩效。
 
-每班 4 分钟。朝海面两处浅金水纹抛竿更容易等到咬钩。船员往同一条路赶去交货，榜首容易被围。活饵渔获在连击收益之外再乘 ×1.8。
+白天 4 分钟。朝海面两处浅金水纹抛竿更容易等到咬钩。船员往同一条路赶去交货，榜首容易被围。活饵渔获在连击收益之外再乘 ×1.8。已售渔获同时存进营地仓库。
 
-左上显示本班团队指标。右上「绩效榜」可打开实时排名。下班暂停并结算，按 Enter 或点「开始下一班」才进入下一天。第一名加发当班渔获款的 25%，末位扣当班渔获款的 20%，次日戴「待优化」帽并减速 10%。
+夜晚 2 分钟。海怪直奔仓库，带走渔获会削减三天指标计入值，已经发到个人账上的鱼款可留用。左上显示当日指标、三天进度和仓库受损。天亮显示日榜并暂停，按 Enter 或点「开始下一班」继续。日榜第一名加发当日渔获款的 25%，末位扣 20%，次日戴「待优化」帽并减速 10%。
+
+每三天统一查账。达标时从结算榜进入螃蟹战，打赢即完成这座岛。欠账时，大肥鱼吃掉三天累计绩效最低的在岗活人或机器人，该工位次日变成幽灵。幽灵靠近队友可以把人推倒。还魂费 ¥80，每次最多交 ¥20。缺钱的幽灵可靠近有鱼款的机器人按 R，请它帮付。活着的真人也可以走近幽灵出钱。
 
 ## 跟大肥鱼说话
 
@@ -55,20 +60,22 @@ npm run dev
 ## 复现与自查
 
 - `?seed=m2-review` 固定渔获和机器人的随机序列。调试面板可读当前种子。
-- `?day=3` 从第三天开局。每班结算与老板面谈在暂停榜单中显示，确认后进入下一天。昼夜切换和三天团队指标安排在 M5。
+- `?day=3` 从第三天开局，当前周期按实际玩的天数和渔获入账。周期在第 3、6、9 天等日期结算。
 - `?debug=1` 显示物理、交货、干扰、逃鱼及易手数据，以及老板调用、鱼价和好感，并开放只读调试接口。
-- 调试模式可加 `&shiftSeconds=48` 缩短每班时长，便于复验结算。可用范围 10–240 秒。
-- [固定种子试玩](https://lauhux022-creator.github.io/fatfish-island/?seed=m2-review&day=3&debug=1) · [48 秒结算复现](https://lauhux022-creator.github.io/fatfish-island/?seed=m2-review&day=3&debug=1&shiftSeconds=48)
+- 调试模式可加 `&shiftSeconds=48&nightSeconds=8` 加速。白班可设 10–240 秒，夜班可设 8–120 秒。联机时由建房者的调试参数决定。
+- [固定种子试玩](https://lauhux022-creator.github.io/fatfish-island/?seed=m2-review&day=3&debug=1) · [短班螃蟹复现](https://lauhux022-creator.github.io/fatfish-island/?seed=m5-night&day=3&debug=1&shiftSeconds=48&nightSeconds=8) · [短班幽灵复现](https://lauhux022-creator.github.io/fatfish-island/?seed=m5-quick&day=3&debug=1&shiftSeconds=38&nightSeconds=10)
 
 启动开发服务后，在另一终端运行 `npm run test:smoke`。脚本通过无头 Chrome 模拟按键和点击，验证钓鱼交货、钩木箱、逃鱼移除、队友活饵收益、友伤、两种抢鱼和日末暂停。需要 Chrome，亦可用 `CHROME_PATH` 指定兼容的 Chromium。指定 `SCREENSHOT_DIR=docs/screenshots` 可重拍截图；指定 `GAME_URL` 可验证远程部署。
 
-`npm run test:review` 用相同种子和真实键鼠事件跑完整个 240 模拟秒，输出各人交鱼、入账、受扰、逃鱼及易手数据。默认用浏览器时钟推进整班，设置 `REVIEW_REALTIME=1` 可按真实时间跑。
+`npm run test:review` 用相同种子和真实键鼠事件跑到 240 秒白班结束，输出各人交鱼、入账、受扰、逃鱼及易手数据。默认用浏览器时钟推进整班，设置 `REVIEW_REALTIME=1` 可按真实时间跑。
 
 `npm run test:m3` 覆盖老板五个触发时机与聊天裁决。`npm run test:brain` 验证 JSON 白名单、服务端请求格式和四秒超时回退。
 
 运行 `npm run test:rooms` 验证共享工位、真实 WebSocket 房间和 DeepSeek 模拟响应。先启动 `npm run dev`，再运行 `npm run test:m4`，从独立 Chrome 客户端验证满房、20 Hz 回执、插值、预测、访客递话、后台恢复和断线观战。设置 `SCREENSHOT_DIR=docs/screenshots` 可重拍 M4 图。用 `PAGES_ONLY=1` 加 `GAME_URL` 可检验线上静态试玩。
 
 `npm run test:m45` 验证选角、首批模型加载顺序、挥桨后的布娃娃、面谈立绘与联机选角。角色和音效来自审查者提供的素材包，程序化角色在模型加载时用于占位。[角色设定](docs/dafeiyu-bible.md)
+
+`npm run test:campaign` 逐步检查默认昼夜时间、三天累计、失窃、幽灵和螃蟹通关。`npm run test:m5` 用无头 Chrome 分别跑本地和双客户端联机，验证防御建造、夜末结算、幽灵和通关。加 `SCREENSHOT_DIR=docs/screenshots` 可重拍 M5 图，加 `PAGES_ONLY=1 GAME_URL=<试玩地址> EXPECTED_COMMIT=<短哈希>` 可核对 Pages 发布版本并复跑本地入夜。
 
 ## 目录与联机配置
 

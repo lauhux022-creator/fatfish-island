@@ -46,7 +46,10 @@ async function waitFor(description, predicate, seconds = 15) {
 async function openShift({ short, day = 3 } = {}) {
   const url = new URL(base);
   url.search = new URLSearchParams({ seed: 'm2-review', day: String(day), debug: '1' }).toString();
-  if (short) url.searchParams.set('shiftSeconds', String(short));
+  if (short) {
+    url.searchParams.set('shiftSeconds', String(short));
+    url.searchParams.set('nightSeconds', '8');
+  }
   assert.equal((await page.goto(url.href, { waitUntil: 'domcontentloaded' }))?.status(), 200);
   await page.waitForLoadState('networkidle', { timeout: 45000 });
   for (let tries = 0; tries < 100; tries++) {
@@ -147,7 +150,9 @@ try {
   console.log('落水工亡触发大肥鱼吐槽');
 
   await openShift({ short: 12 });
-  const paused = await waitFor('日末暂停', (s) => s.shiftPaused, 14);
+  const dusk = await waitFor('日落后进入夜班', (s) => s.campaign.phase === 'night', 14);
+  assert(!dusk.shiftPaused);
+  const paused = await waitFor('日末暂停', (s) => s.shiftPaused, 10);
   const reviewed = await waitFor('绩效面谈出现在结算榜', (s) =>
     s.boss.interview?.trigger === 'shift_end', 14);
   assert.equal(reviewed.tick, paused.tick);

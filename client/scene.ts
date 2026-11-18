@@ -1,7 +1,10 @@
 import * as T from 'three';
-import { ISLAND, PLAY } from '../shared/sim/config';
+import { BUILD_KINDS, type CampaignView } from '../shared/sim/campaign-types';
+import { CAMPAIGN, ISLAND, PLAY } from '../shared/sim/config';
+import { buildAhead, buildSiteAvailable, snapBuildSite } from '../shared/sim/construction';
 import type { FishState, PlayerView, Pose, SimSnapshot, Vec3 } from '../shared/sim/types';
 import { createActorAssets, makeActor } from './assets/actors';
+import { makeCampaignArt, makeGhost } from './assets/campaign';
 import { crewBadge } from './assets/crew-badge';
 import { makeGeometryKit } from './assets/geometry';
 import { createModels } from './assets/models';
@@ -27,8 +30,10 @@ export function createScene(canvas: HTMLCanvasElement) {
   renderer.toneMappingExposure = 1.43;
 
   const world = new T.Scene();
-  world.background = new T.Color(0xa5c5ac);
-  world.fog = new T.Fog(0xa8c6ad, 24, 77);
+  const sky = new T.Color(0xa5c5ac);
+  const fog = new T.Fog(0xa8c6ad, 24, 77);
+  world.background = sky;
+  world.fog = fog;
   const dome = new T.HemisphereLight(0xffe7b4, 0x6b8668, 2.24);
   world.add(dome);
   const key = new T.DirectionalLight(0xffdfaa, 2.45);
@@ -49,6 +54,15 @@ export function createScene(canvas: HTMLCanvasElement) {
   fill.position.set(6, 9, 12);
   world.add(fill);
 
+  const lighting = [
+    { color: sky, from: sky.clone(), to: new T.Color(0x343c63) },
+    { color: fog.color, from: fog.color.clone(), to: new T.Color(0x394769) },
+    { color: dome.color, from: dome.color.clone(), to: new T.Color(0x9abce6) },
+    { color: dome.groundColor, from: dome.groundColor.clone(), to: new T.Color(0x777695) },
+    { color: key.color, from: key.color.clone(), to: new T.Color(0xa4c7f4) },
+    { color: fill.color, from: fill.color.clone(), to: new T.Color(0xc2c8eb) },
+  ];
+
   const camera = new T.PerspectiveCamera(50, 1, 0.15, 120);
   const focal = new T.Vector3();
   const tracking = new T.Vector3();
@@ -68,12 +82,15 @@ export function createScene(canvas: HTMLCanvasElement) {
   let aimingAtCrew = false;
   let localPlayerId = '';
   let crewViews: PlayerView[] = [];
+  let night = 0;
+  let defenseCamera = 0;
 
   const kit = makeGeometryKit();
   const appearances = createActorAssets();
   let priorityModels: Promise<unknown> | undefined;
   const models = createModels(kit);
   const island = makeIsland(world, kit, appearances);
+  const campaignArt = makeCampaignArt(world, kit, appearances);
   const speechPoint = new T.Vector3();
   const workers = new Map<string, ReturnType<typeof createWorker>>();
   const fish = new Map<string, ReturnType<typeof models.fish> & { state: FishState; carrierId: string | null }>();
@@ -91,6 +108,12 @@ export function createScene(canvas: HTMLCanvasElement) {
   const crosshair = new T.Mesh(new T.RingGeometry(0.73, 1, 28, 1), new T.MeshBasicMaterial({ color: 0xffedd0, opacity: 0.72, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 }));
   crosshair.rotation.x = -Math.PI / 2;
   world.add(crosshair);
+  const buildMarker = new T.Mesh(
+    new T.RingGeometry(0.27, 0.38, 4, 1, Math.PI / 4),
+    new T.MeshBasicMaterial({ transparent: true, opacity: 0.86, depthWrite: false, toneMapped: false }),
+  );
+  buildMarker.rotation.x = -Math.PI / 2;
+  world.add(buildMarker);
 
   const shockArcGeometries = [0.09, 0.14, 0.2].map((arcWidth, index) => {
     const start = -0.66 + index * 0.05;
@@ -136,6 +159,7 @@ export function createScene(canvas: HTMLCanvasElement) {
 
     return {
       model, actor, rodOrigin, paddleOrigin, badge, lineColor, line, linePoints, bobber, bite, splash, shockwave, shockArcs,
+      ghost: makeGhost(world, kit, accent),
       walk: (index * 2.3) % (Math.PI * 2), ragdoll: false, wet: false, splashAt: -10,
     };
   }
@@ -153,7 +177,7 @@ export function createScene(canvas: HTMLCanvasElement) {
     let closest: PlayerView | undefined;
     let nearest = Infinity;
     for (const mate of crewViews) {
-      if (mate.id === localPlayerId || mate.ragdoll || mate.baitedBy) continue;
+      if (mate.id === localPlayerId || mate.ragdoll || mate.baitedBy || mate.ghost) continue;
       const point = mate.position;
       projection.set(point.x, point.y, point.z).project(camera);
       if (projection.z < -1 || projection.z > 1) continue;
@@ -205,7 +229,7 @@ export function createScene(canvas: HTMLCanvasElement) {
     return { x: rect.left + (projection.x + 1) * 0.5 * rect.width, y: rect.top + (1 - projection.y) * 0.5 * rect.height };
   }
 
-  function frameCamera(snapshot: SimSnapshot, delta: number) {
+  function frameCamera(snapshot: SimSnapshot, delta: number, campaign: CampaignView) {
     const newWidth = Math.max(1, canvas.clientWidth);
     const newHeight = Math.max(1, canvas.clientHeight);
     if (newWidth !== width || newHeight !== height) {
@@ -219,16 +243,41 @@ export function createScene(canvas: HTMLCanvasElement) {
     const focus = snapshot.player.position;
     const narrow = Math.max(0, 1.17 - camera.aspect);
     const carryFocus = snapshot.player.carrying ? Math.min(0.48, narrow * 0.72) : 0;
-    const focusX = T.MathUtils.lerp(focus.x * 0.72, scalePosition.x, carryFocus);
-    focal.set(focusX, 0.25, focus.z * 0.79 - 3.22);
+    const transition = delta ? 1 - Math.exp(-2.8 * delta) : 1;
+    defenseCamera = T.MathUtils.lerp(defenseCamera, campaign.phase === 'night' || campaign.phase === 'boss' ? 1 : 0, transition);
+    const daytimeX = T.MathUtils.lerp(focus.x * 0.72, scalePosition.x, carryFocus);
+    const crab = campaign.enemies.find(enemy => enemy.kind === 'crab')?.position;
+    const defenseX = crab ? T.MathUtils.lerp(focus.x * 0.72, crab.x, 0.29) : focus.x * 0.49;
+    const dockFraming = Math.max(0, 1 - camera.aspect) * (height < 720 ? 6.4 : 2.35);
+    const defenseZ = crab ? T.MathUtils.lerp(focus.z, crab.z, 0.44) - 1.6 : focus.z * 0.38 - 0.22 + dockFraming;
+    focal.set(
+      T.MathUtils.lerp(daytimeX, defenseX, defenseCamera),
+      0.25,
+      T.MathUtils.lerp(focus.z * 0.79 - 3.22, defenseZ, defenseCamera),
+    );
     tracking.lerp(focal, delta ? 1 - Math.exp(-5.3 * delta) : 1);
-    camera.position.set(tracking.x, tracking.y + 6.52 + narrow * 2.4, tracking.z + 12.72 + narrow * 8.1);
+    camera.position.set(
+      tracking.x,
+      tracking.y + 6.52 + defenseCamera * 2.8 + narrow * 2.4,
+      tracking.z + 12.72 + defenseCamera * 2.85 + narrow * 8.1,
+    );
     camera.lookAt(tracking);
     camera.updateMatrixWorld();
   }
 
   function animatePlayer(view: PlayerView, worker: ReturnType<typeof createWorker>, delta: number, seconds: number) {
     const { model: player, actor, shockwave, shockArcs } = worker;
+    const floating = view.ghost;
+    worker.ghost.animate(floating, view.position, seconds);
+    for (const member of player.ragdoll.values()) member.visible = false;
+    if (floating) {
+      player.yaw.visible = false;
+      worker.shockwave.visible = false;
+      worker.splash.visible = false;
+      worker.ragdoll = false;
+      worker.wet = false;
+      return;
+    }
     const ragdolled = view.parts.length > 0;
     const entangled = Boolean(view.baitedBy);
     const moved = Math.min(1, view.speed / PLAY.moveSpeed);
@@ -237,7 +286,6 @@ export function createScene(canvas: HTMLCanvasElement) {
     for (const hat of player.hats) hat.visible = view.optimization;
     player.loadedHat.visible = actor.ready && view.optimization;
     for (const piece of player.standing.values()) piece.visible = !actor.ready;
-    for (const member of player.ragdoll.values()) member.visible = false;
     for (const member of view.parts) {
       const model = player.ragdoll.get(member.limb);
       if (!model) continue;
@@ -312,7 +360,10 @@ export function createScene(canvas: HTMLCanvasElement) {
   function animateCrew(snapshot: SimSnapshot, delta: number, seconds: number, selfId: string | null) {
     localPlayerId = selfId ?? '';
     crewViews = snapshot.players;
-    priorityModels ??= Promise.all([appearances.load('feiyu'), appearances.load(snapshot.player.roleId)]);
+    if (!priorityModels) {
+      priorityModels = Promise.all([appearances.load('feiyu'), appearances.load(snapshot.player.roleId)]);
+      void priorityModels.then(() => appearances.load('crab'));
+    }
     const loadedRoles: string[] = [];
     const badgeLayout: { x: number; y: number; width: number; height: number }[] = [];
     const unitsPerPixel = 2 * Math.tan(T.MathUtils.degToRad(camera.fov / 2)) / height;
@@ -329,7 +380,7 @@ export function createScene(canvas: HTMLCanvasElement) {
 
       const badge = worker.badge;
       badge.setName(view.id === localPlayerId ? '你' : view.name);
-      badge.setStatus(view.baitedBy ? '当饵中' : view.optimization ? '待优化' : '');
+      badge.setStatus(view.ghost ? '幽灵' : view.baitedBy ? '当饵中' : view.optimization ? '待优化' : '');
       badge.resize(unitsPerPixel);
       const head = view.parts.find(part => part.limb === 'head')?.position;
       const anchor = head ?? view.position;
@@ -411,10 +462,22 @@ export function createScene(canvas: HTMLCanvasElement) {
     }
   }
 
+  function animateBuildMarker(snapshot: SimSnapshot, selfId: string | null) {
+    const { player, campaign, shiftPaused } = snapshot;
+    buildMarker.visible = Boolean(selfId) && (campaign.phase === 'night' || campaign.phase === 'boss')
+      && !shiftPaused && !player.ghost && !player.baitedBy && !player.ragdoll;
+    if (!buildMarker.visible) return;
+    const site = snapBuildSite(buildAhead(player.position, player.yaw));
+    const woodAvailable = BUILD_KINDS.some(kind => campaign.wood >= CAMPAIGN.build[kind].cost);
+    const spaceAvailable = buildSiteAvailable(site, campaign.structures, campaign.enemies);
+    buildMarker.position.set(site.x, (isWater(site.x, site.z) ? ISLAND.seaY : site.y) + 0.08, site.z);
+    buildMarker.material.color.setHex(woodAvailable && spaceAvailable ? 0xf7c66e : 0xff715e);
+  }
+
   function animateHook(view: PlayerView, worker: ReturnType<typeof createWorker>, seconds: number) {
     const { model, lineColor, line, linePoints, bobber, bite } = worker;
     const { position: hook, phase, target } = view.hook;
-    const active = Boolean(hook && !view.ragdoll && !view.baitedBy);
+    const active = Boolean(hook && !view.ragdoll && !view.baitedBy && !view.ghost);
     const tether = target === 'player';
     line.visible = active;
     bobber.visible = active;
@@ -478,13 +541,24 @@ export function createScene(canvas: HTMLCanvasElement) {
     const animationTime = performance.now() / 1000;
     const animationDelta = previousAnimationTime < 0 ? 0 : Math.min(0.1, Math.max(0, animationTime - previousAnimationTime));
     previousAnimationTime = animationTime;
-    frameCamera(snapshot, delta);
-    island.animate(elapsed, animationDelta, snapshot.boss.line?.emotion ?? 'calm', bossSpeaking);
-    const bossModel = island.bossModel;
+    const { campaign } = snapshot;
+    const targetNight = campaign.phase === 'night' ? 1 : campaign.phase === 'boss' ? 0.12 : 0;
+    night = T.MathUtils.lerp(night, targetNight, delta ? 1 - Math.exp(-2.15 * delta) : 1);
+    for (const { color, from, to } of lighting) color.copy(from).lerp(to, night);
+    dome.intensity = T.MathUtils.lerp(2.24, 1.75, night);
+    key.intensity = T.MathUtils.lerp(2.45, 0.95, night);
+    fill.intensity = T.MathUtils.lerp(0.48, 0.42, night);
+    frameCamera(snapshot, delta, campaign);
+    island.animate(elapsed, animationDelta, snapshot.boss.line?.emotion ?? 'calm', bossSpeaking, night);
+    campaignArt.animate(campaign, elapsed, night, camera);
+    const { bossModel } = island;
+    const { crabModel } = campaignArt;
     if (canvas.dataset.bossModel !== bossModel) canvas.dataset.bossModel = bossModel;
+    if (canvas.dataset.crabModel !== crabModel) canvas.dataset.crabModel = crabModel;
     animateCrew(snapshot, animationDelta, elapsed, selfId);
     animateFish(snapshot, elapsed);
     animateCrosshair(snapshot);
+    animateBuildMarker(snapshot, selfId);
     animateEffects(snapshot, elapsed);
     renderer.render(world, camera);
   }
@@ -492,6 +566,7 @@ export function createScene(canvas: HTMLCanvasElement) {
   function dispose() {
     for (const { actor } of workers.values()) actor.dispose();
     island.dispose();
+    campaignArt.dispose();
     appearances.dispose();
     const geometries = new Set<T.BufferGeometry>();
     const materials = new Set<T.Material>();

@@ -1,4 +1,5 @@
 import type { FishBrainOutput, FishTrigger } from '../fish-brain/types';
+import type { BuildKind, CampaignView } from './campaign-types';
 import type { WorkerAnimation, WorkerRoleId } from './cast';
 
 export interface Vec3 {
@@ -38,6 +39,8 @@ export interface SimInput {
   swingPressed: boolean;
   interactPressed: boolean;
   jumpPressed: boolean;
+  build?: BuildKind;
+  revivePressed?: boolean;
   continuePressed?: boolean;
   chat?: string;
 }
@@ -80,6 +83,8 @@ export interface PlayerView extends Pose {
   giftedBait: boolean;
   metrics: PlayerMetrics;
   optimization: boolean;
+  ghost: boolean;
+  revivePaid: number;
   /** ID of the teammate who hooked or launched this worker. */
   baitedBy: string | null;
   hook: HookView;
@@ -182,6 +187,7 @@ export interface SimSnapshot {
   teamTarget: number;
   metrics: ShiftMetrics;
   result: ShiftResult | null;
+  campaign: CampaignView;
   boss: BossView;
   hook: HookView;
   fish: FishView[];

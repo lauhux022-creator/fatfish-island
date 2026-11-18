@@ -2,6 +2,7 @@ import {
   ROOM_CODE_PATTERN, ROOM_MAX_NAME, ROOM_SNAPSHOT_HZ,
   type RoomBrain, type RoomClientMessage, type RoomServerMessage, type RoomSnapshotMessage, type RoomWelcome,
 } from '../../shared/net/types';
+import { BUILD_KINDS } from '../../shared/sim/campaign-types';
 import { isWorkerAnimation, isWorkerRoleId, type WorkerRoleId } from '../../shared/sim/cast';
 import { STEP_SECONDS } from '../../shared/sim/config';
 import { predictPlayerMovement } from '../../shared/sim/prediction';
@@ -56,6 +57,7 @@ interface ClientOptions {
   seed?: string;
   day?: number;
   shiftSeconds?: number;
+  nightSeconds?: number;
   onStatus: (status: RoomClientStatus) => void;
 }
 
@@ -117,17 +119,40 @@ function pose(value: unknown): value is Record<string, unknown> {
   return record(value) && vector(value.position) && vector(value.rotation, true);
 }
 
+function defenseEntity(value: unknown): value is Record<string, unknown> {
+  return record(value) && typeof value.id === 'string' && vector(value.position) && numbers(value, ['yaw', 'hp', 'maxHp']);
+}
+
+function campaignShape(value: unknown) {
+  if (!record(value) || !['day', 'night', 'boss', 'cleared'].some((phase) => phase === value.phase)
+    || !numbers(value, ['remaining', 'reviveCost', 'wood'])
+    || !record(value.warehouse) || !vector(value.warehouse.position)
+    || !numbers(value.warehouse, ['stock', 'value', 'lostFish', 'lostValue'])
+    || !record(value.cycle) || !numbers(value.cycle, ['firstDay', 'lastDay', 'secured', 'target'])
+    || !Array.isArray(value.structures)
+    || !value.structures.every((item) => defenseEntity(item) && BUILD_KINDS.some((kind) => kind === item.kind))
+    || !Array.isArray(value.enemies) || !value.enemies.every((item) => defenseEntity(item)
+      && (item.kind === 'raider' || item.kind === 'crab')
+      && ['advance', 'windup', 'recover'].some((state) => state === item.state)
+      && (item.attack === undefined || (record(item.attack) && vector(item.attack.position) && numbers(item.attack, ['radius']))))) return false;
+
+  const result = value.lastCycle;
+  return result === null || (record(result) && numbers(result, ['day', 'secured', 'target'])
+    && typeof result.passed === 'boolean'
+    && (result.eaten === null || (record(result.eaten) && typeof result.eaten.id === 'string' && typeof result.eaten.name === 'string')));
+}
+
 function snapshotShape(value: unknown): value is SimSnapshot {
   if (!record(value) || !numbers(value, ['tick', 'day', 'time', 'shiftRemaining', 'teamRevenue', 'teamTarget'])
     || !record(value.notices) || !record(value.boss) || !numbers(value.boss, ['cooldownSeconds', 'priceMultiplier'])
     || !record(value.metrics) || !Array.isArray(value.players) || value.players.length !== 4
-    || !Array.isArray(value.fish) || !Array.isArray(value.crates)) return false;
+    || !Array.isArray(value.fish) || !Array.isArray(value.crates) || !campaignShape(value.campaign)) return false;
   if (value.result !== null && (!record(value.result) || !Array.isArray(value.result.ranking)
     || !value.result.ranking.every((entry) => record(entry) && isWorkerRoleId(entry.roleId)))) return false;
   return value.players.every((player: unknown) =>
     pose(player) && typeof player.id === 'string' && typeof player.name === 'string' && typeof player.bot === 'boolean'
-    && isWorkerRoleId(player.roleId) && isWorkerAnimation(player.animation)
-    && numbers(player, ['yaw', 'speed', 'ragdoll', 'cash', 'sold', 'shiftCash', 'shiftSold', 'favor'])
+    && isWorkerRoleId(player.roleId) && isWorkerAnimation(player.animation) && typeof player.ghost === 'boolean'
+    && numbers(player, ['yaw', 'speed', 'ragdoll', 'cash', 'sold', 'shiftCash', 'shiftSold', 'favor', 'revivePaid'])
     && vector(player.velocity) && record(player.metrics) && Array.isArray(player.parts) && player.parts.every(pose)
     && record(player.hook) && numbers(player.hook, ['charge', 'progress'])
     && (player.hook.position === null || vector(player.hook.position)))
@@ -163,7 +188,7 @@ function parseMessage(raw: unknown): RoomServerMessage | null {
 }
 
 function shouldPredict(player: PlayerView, state: SimSnapshot) {
-  return !state.shiftPaused && !player.ragdoll && !player.baitedBy;
+  return state.campaign.phase !== 'cleared' && !player.ghost && !state.shiftPaused && !player.ragdoll && !player.baitedBy;
 }
 
 function limitPrediction(guess: PlayerView, origin: PlayerView) {
@@ -265,7 +290,8 @@ export function createRoomClient(options: ClientOptions) {
     if (!message.state.players.some(({ id }) => id === state.focusId)) return;
 
     if (!previous || lastReceivedAt === null || now - lastReceivedAt > gapMs
-      || message.serverTick - previous.tick > 18 || previous.state.day !== message.state.day) {
+      || message.serverTick - previous.tick > 18 || previous.state.day !== message.state.day
+      || previous.state.campaign.phase !== message.state.campaign.phase) {
       buffer.length = 0;
       interpolationTick = message.serverTick;
       clockOrigin = now - message.serverTick * stepMs;
@@ -364,7 +390,10 @@ export function createRoomClient(options: ClientOptions) {
     const { roleId } = intent;
     open(url, code
       ? { type: 'join', code, name, roleId }
-      : { type: 'create', name, roleId, seed: options.seed, day: options.day, shiftSeconds: options.shiftSeconds });
+      : {
+        type: 'create', name, roleId, seed: options.seed, day: options.day,
+        shiftSeconds: options.shiftSeconds, nightSeconds: options.nightSeconds,
+      });
   }
 
   function restore() {

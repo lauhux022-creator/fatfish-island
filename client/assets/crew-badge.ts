@@ -1,6 +1,6 @@
 import * as T from 'three';
 
-export type BadgeStatus = '' | '当饵中' | '待优化';
+export type BadgeStatus = '' | '当饵中' | '待优化' | '幽灵';
 
 const textureWidth = 272;
 const textureHeight = 76;
@@ -53,7 +53,7 @@ export function crewBadge(parent: T.Object3D, name: string, accent: string) {
     if (status) {
       context.beginPath();
       context.roundRect(left + 133, 13, 114, 43, 9);
-      context.fillStyle = status === '当饵中' ? '#f49c6e' : '#ffcf74';
+      context.fillStyle = status === '幽灵' ? '#83dece' : status === '当饵中' ? '#f49c6e' : '#ffcf74';
       context.fill();
       context.fillStyle = '#37281b';
       context.font = '900 31px "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif';

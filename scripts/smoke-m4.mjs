@@ -9,6 +9,7 @@ const base = new URL(process.env.GAME_URL || 'http://127.0.0.1:5173/fatfish-isla
 const roomPath = '/fatfish-island/rooms';
 const pagesOnly = process.env.PAGES_ONLY === '1';
 const shots = process.env.SCREENSHOT_DIR;
+const readyTimeout = Number(process.env.BROWSER_READY_TIMEOUT_MS ?? 30_000);
 const browser = await chromium.launch({
   channel: process.env.CHROME_PATH ? undefined : 'chrome',
   executablePath: process.env.CHROME_PATH,
@@ -61,10 +62,10 @@ async function makeDropRelay() {
   };
 }
 
-async function boot(name, { droppable = false, first = false } = {}) {
+async function boot(name, { roleId = 'gpt', droppable = false, first = false } = {}) {
   const context = await browser.newContext({ viewport: first ? { width: 1280, height: 800 } : { width: 1000, height: 625 } });
   const page = await context.newPage();
-  const client = { context, page, name, errors: [], frames: [], sent: [], connections: 0 };
+  const client = { context, page, name, roleId, errors: [], frames: [], sent: [], connections: 0 };
   clients.push(client);
   page.on('pageerror', (err) => client.errors.push(err.message));
   page.on('websocket', (socket) => {
@@ -83,10 +84,13 @@ async function boot(name, { droppable = false, first = false } = {}) {
   });
   if (droppable) client.relay = await makeDropRelay();
   const url = new URL(base);
-  url.search = new URLSearchParams({ seed: 'm4-review', day: '3', debug: '1' }).toString();
-  const response = await page.goto(url.href, { waitUntil: 'domcontentloaded' });
+  url.search = new URLSearchParams({ seed: 'm4-review', day: '3', debug: '1', role: roleId }).toString();
+  const response = await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: readyTimeout });
   assert.equal(response?.status(), 200);
-  await wait(client, () => window.fatfishDebug?.snapshot().tick > 2 && window.fatfishDebug.network().mode === 'local');
+  await wait(client, (roleId) => {
+    const game = window.fatfishDebug;
+    return game?.snapshot().tick > 2 && game.snapshot().player.roleId === roleId && game.network().mode === 'local';
+  }, roleId, readyTimeout);
   if (process.env.EXPECTED_COMMIT) {
     assert.equal(await page.locator('[data-commit]').textContent(), process.env.EXPECTED_COMMIT);
   }
@@ -102,6 +106,7 @@ async function roomDialog(client) {
 async function occupy(client, code) {
   await roomDialog(client);
   await client.page.locator('[data-room-name]').fill(client.name);
+  await client.page.locator('[data-room-character]').selectOption(client.roleId);
   if (client.relay) {
     await client.page.locator('[data-room-address] summary').click();
     await client.page.locator('[data-room-endpoint]').fill(client.relay.url);
@@ -120,6 +125,7 @@ async function playing(client) {
     return net.mode === 'playing' && net.serverTick > 0;
   });
   assert.equal(await client.page.locator('[data-room-dialog]').isVisible(), false);
+  assert.equal((await state(client)).player.roleId, client.roleId);
   return debug(client);
 }
 
@@ -233,7 +239,7 @@ try {
     assert.equal((await state(host)).players.filter(({ bot }) => bot).length, 3);
     const hz = await rate(host);
 
-    const guest = await boot('黑豆', { droppable: true });
+    const guest = await boot('黑豆', { roleId: 'claude', droppable: true });
     await occupy(guest, hostRoom.code);
     const guestRoom = await playing(guest);
     assert.notEqual(guestRoom.playerId, hostRoom.playerId);
@@ -247,7 +253,7 @@ try {
     await photo(host, '02-two-workers');
     console.log(`四位房间码、2 人 + 2 机器人、独立视角与输入回执，实测 ${hz.toFixed(2)} Hz`);
 
-    const [third, fourth] = await Promise.all([boot('泥巴'), boot('小锚')]);
+    const [third, fourth] = await Promise.all([boot('泥巴', { roleId: 'grok' }), boot('小锚', { roleId: 'kimi' })]);
     await occupy(third, hostRoom.code);
     const thirdRoom = await playing(third);
     await observeHumans(host, 3);
@@ -259,7 +265,7 @@ try {
     assert.equal(new Set([hostRoom.playerId, guestRoom.playerId, ...rest.map(({ playerId }) => playerId)]).size, 4);
     await photo(host, '03-four-workers');
 
-    const extra = await boot('候补');
+    const extra = await boot('候补', { roleId: guest.roleId });
     await occupy(extra, hostRoom.code);
     await wait(extra, () => Boolean(window.fatfishDebug.network().error));
     assert.equal((await debug(extra)).mode, 'local');

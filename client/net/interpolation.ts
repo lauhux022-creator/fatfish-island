@@ -1,3 +1,4 @@
+import type { EnemyView } from '../../shared/sim/campaign-types';
 import type { HookView, PlayerView, Pose, Rotation, SimSnapshot, Vec3 } from '../../shared/sim/types';
 
 function lerp(from: number, to: number, amount: number) {
@@ -18,6 +19,11 @@ function rotation(from: Rotation, to: Rotation, amount: number): Rotation {
   return { x: x / length, y: y / length, z: z / length, w: w / length };
 }
 
+function yawBlend(from: number, to: number, amount: number) {
+  const arc = to - from;
+  return from + Math.atan2(Math.sin(arc), Math.cos(arc)) * amount;
+}
+
 function poses(from: Pose, to: Pose, amount: number): Pose {
   return { position: vector(from.position, to.position, amount), rotation: rotation(from.rotation, to.rotation, amount) };
 }
@@ -30,13 +36,12 @@ function interpolateHook(current: HookView, from: HookView, to: HookView, amount
 
 function interpolatePlayer(current: PlayerView, from: PlayerView, to: PlayerView, amount: number): PlayerView {
   const ragdoll = current.ragdoll > 0;
-  if (ragdoll !== (from.ragdoll > 0) || ragdoll !== (to.ragdoll > 0)) return current;
-  const arc = to.yaw - from.yaw;
-  const yaw = from.yaw + Math.atan2(Math.sin(arc), Math.cos(arc)) * amount;
+  if (ragdoll !== (from.ragdoll > 0) || ragdoll !== (to.ragdoll > 0)
+    || current.ghost !== from.ghost || current.ghost !== to.ghost) return current;
   return {
     ...current,
     ...poses(from, to, amount),
-    yaw,
+    yaw: yawBlend(from.yaw, to.yaw, amount),
     speed: lerp(from.speed, to.speed, amount),
     velocity: vector(from.velocity, to.velocity, amount),
     hook: interpolateHook(current.hook, from.hook, to.hook, amount),
@@ -56,6 +61,19 @@ function interpolateEntities<T extends Pose & { id: string; state: string }>(
     const later = to.find(({ id }) => id === item.id);
     if (!earlier || !later || earlier.state !== item.state || later.state !== item.state) return item;
     return { ...item, ...poses(earlier, later, amount) };
+  });
+}
+
+function interpolateEnemies(current: EnemyView[], from: EnemyView[], to: EnemyView[], amount: number) {
+  return current.map((enemy) => {
+    const earlier = from.find(({ id }) => id === enemy.id);
+    const later = to.find(({ id }) => id === enemy.id);
+    if (!earlier || !later || earlier.state !== enemy.state || later.state !== enemy.state) return enemy;
+    return {
+      ...enemy,
+      position: vector(earlier.position, later.position, amount),
+      yaw: yawBlend(earlier.yaw, later.yaw, amount),
+    };
   });
 }
 
@@ -88,5 +106,9 @@ export function interpolateRoom(
     }),
     fish: interpolateEntities(latest.fish, from.fish, to.fish, amount),
     crates: interpolateEntities(latest.crates, from.crates, to.crates, amount),
+    campaign: {
+      ...latest.campaign,
+      enemies: interpolateEnemies(latest.campaign.enemies, from.campaign.enemies, to.campaign.enemies, amount),
+    },
   };
 }

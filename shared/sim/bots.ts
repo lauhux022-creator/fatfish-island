@@ -1,4 +1,4 @@
-import { BOTS, FISHING, ISLAND, PLAY } from './config';
+import { BOTS, CAMPAIGN, FISHING, ISLAND, PLAY } from './config';
 import { seededRandom } from './random';
 import { emptyInput, type PlayerView, type SimInput, type SimSnapshot, type Vec3 } from './types';
 
@@ -30,6 +30,7 @@ interface Brain {
   previousRival: string | null;
   crossed: boolean;
   throwAt: number;
+  defenseHitAt: number;
 }
 
 function sample(random: () => number, [low, high]: Range) {
@@ -95,7 +96,7 @@ function chooseRival(snapshot: SimSnapshot, player: PlayerView, claims: Map<stri
   let choice: PlayerView | undefined;
   let best = Infinity;
   for (const rival of snapshot.players) {
-    if (rival.id === player.id || rival.ragdoll > 0 || rival.baitedBy || !isInTraffic(rival)) continue;
+    if (rival.id === player.id || rival.ghost || rival.ragdoll > 0 || rival.baitedBy || !isInTraffic(rival)) continue;
     const claim = claims.get(rival.id);
     if (claim && claim.until > snapshot.time) continue;
     const range = distance(player.position, rival.position);
@@ -143,7 +144,7 @@ function mischiefInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, 
 
   const { victim, until, steal } = brain.pursuit;
   const rival = snapshot.players.find((worker) => worker.id === victim);
-  if (!rival || rival.ragdoll > 0 || rival.baitedBy || !isInTraffic(rival) || time >= until) {
+  if (!rival || rival.ghost || rival.ragdoll > 0 || rival.baitedBy || !isInTraffic(rival) || time >= until) {
     endPursuit(brain, player, claims, time, false);
     return undefined;
   }
@@ -225,7 +226,7 @@ function workInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, prof
     }
     const sight = { x: aim.x - origin.x, z: aim.z - origin.z };
     const blocking = snapshot.players.some((other) => {
-      if (other.id === player.id || other.ragdoll > 0) return false;
+      if (other.id === player.id || other.ghost || other.ragdoll > 0) return false;
       const gap = distance(origin, other.position);
       const dot = sight.x * (other.position.x - origin.x) + sight.z * (other.position.z - origin.z);
       return gap < range && dot > PLAY.friendlyArc * range * gap;
@@ -246,6 +247,53 @@ function workInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, prof
   if (snapshot.time < brain.nextCastAt) return { ...emptyInput, aim: castAim };
   brain.releaseAt = snapshot.time + sample(brain.random, BOTS.castHold);
   return { ...emptyInput, aim: castAim, castPressed: true, castHeld: true };
+}
+
+function defenseInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, profile: Profile, id: BotId): SimInput {
+  const { phase, enemies } = snapshot.campaign;
+  const origin = player.position;
+  const patrol = CAMPAIGN.guard.patrols[id];
+  if (player.ragdoll > 0 || player.baitedBy) return emptyInput;
+  if (player.carrying) return deliveryInput(snapshot, player, brain, profile);
+
+  const boss = phase === 'boss';
+  const guards = snapshot.players.filter((other) => other.bot && !other.ghost);
+  const lead = guards.length ? guards[(snapshot.day - 1) % guards.length] : player;
+  const raidRange = lead.id === player.id ? CAMPAIGN.guard.primaryRange : CAMPAIGN.guard.backupRange;
+  const attacker = nearest(enemies, origin, (enemy) => enemy.kind === (boss ? 'crab' : 'raider'),
+    boss ? Infinity : raidRange);
+  if (!attacker) return { ...emptyInput, ...steer(origin, patrol, 0.5), aim: patrol };
+
+  const warning = attacker.attack;
+  if (warning && distance(origin, warning.position) < warning.radius + 0.45) {
+    const center = warning.position;
+    const dx = origin.x - center.x;
+    const dz = origin.z - center.z;
+    const range = distance(origin, center);
+    const clearance = range > 0.1 ? (warning.radius + CAMPAIGN.guard.retreatPadding) / range : 0;
+    const safe = clearance ? { x: center.x + dx * clearance, z: center.z + dz * clearance }
+      : { x: center.x + (patrol.x < 0 ? -1 : 1) * (warning.radius + CAMPAIGN.guard.retreatPadding), z: center.z };
+    return { ...emptyInput, ...steer(origin, safe, 0.1), aim: attacker.position };
+  }
+
+  const close = distance(origin, attacker.position) < PLAY.swingReach - 0.1;
+  const exposed = boss ? attacker.state === 'recover' : attacker.state !== 'windup';
+  const canHit = close && exposed && player.swing <= 0 && snapshot.time >= brain.defenseHitAt;
+  if (canHit) brain.defenseHitAt = snapshot.time + (boss ? CAMPAIGN.guard.strikeGap : CAMPAIGN.guard.raidStrikeGap);
+  return {
+    ...emptyInput, ...steer(origin, attacker.position, boss ? 1.65 : 1.4),
+    aim: attacker.position, swingPressed: canHit,
+  };
+}
+
+function ghostInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain): SimInput {
+  const origin = player.position;
+  const target = nearest(snapshot.players, origin, (other) => !other.ghost && other.ragdoll === 0, Infinity);
+  if (!target) return emptyInput;
+  const aim = target.position;
+  const canPrank = distance(origin, aim) <= CAMPAIGN.ghostPrankReach - 0.1 && snapshot.time >= brain.defenseHitAt;
+  if (canPrank) brain.defenseHitAt = snapshot.time + CAMPAIGN.guard.ghostStrikeGap;
+  return { ...emptyInput, ...steer(origin, aim, 1.4), aim, swingPressed: canPrank };
 }
 
 export function createBotController(seed: string) {
@@ -277,9 +325,16 @@ export function createBotController(seed: string) {
           previousRival: null,
           crossed: false,
           throwAt: 0,
+          defenseHitAt: 0,
         };
         brains.set(id, brain);
       }
+      if (player.ghost) return ghostInput(snapshot, player, brain);
+      if (snapshot.campaign.phase === 'night' || snapshot.campaign.phase === 'boss') {
+        endPursuit(brain, player, claims, snapshot.time, false);
+        return defenseInput(snapshot, player, brain, profile, id);
+      }
+      if (snapshot.campaign.phase !== 'day') return emptyInput;
       return workInput(snapshot, player, brain, profile, claims);
     },
   };
