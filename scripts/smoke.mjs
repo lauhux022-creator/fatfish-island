@@ -257,18 +257,18 @@ async function friendlyFire() {
   console.log('挥桨拍倒队友，六段布娃娃两秒恢复');
 }
 
-async function takeCrewFish(state) {
+async function takeCrewFish() {
+  const state = 'carried';
   for (let attempt = 0; attempt < 13; attempt++) {
     const handle = await probe((state) => {
       const { fish, player } = window.fatfishDebug.snapshot();
       return fish.find((item) => item.state === state && item.carrierId !== player.id &&
-        item.position.y > 0.85 && Math.hypot(item.position.x - player.position.x, item.position.z - player.position.z) <
-        (state === 'thrown' ? 2.22 : 1.8));
+        item.position.y > 0.85 && Math.hypot(item.position.x - player.position.x, item.position.z - player.position.z) < 1.8);
     }, state, 48000);
     const target = await handle.jsonValue();
     await handle.dispose();
     await aimAt({ ...target.position, y: 0 });
-    const { tick, notice } = await read();
+    const { tick } = await read();
     await page.keyboard.press('KeyE');
     // Keep trying through the short pickup grace window, with separate input edges.
     await probe(({ tick, id }) => {
@@ -276,8 +276,7 @@ async function takeCrewFish(state) {
       return next.player.carrying === id || next.tick > tick + 6;
     }, { tick, id: target.id });
     const next = await read();
-    if (state === 'carried' && next.player.carrying === target.id) return target;
-    if (state === 'thrown' && next.notice?.id !== notice?.id && next.notice?.text.includes('半空截胡')) return target;
+    if (next.player.carrying === target.id) return target;
     if (next.player.carrying) {
       await aimAt({ x: next.player.position.x - 2, y: 0, z: next.player.position.z + 2 });
       await page.keyboard.press('KeyE');
@@ -289,7 +288,7 @@ async function takeCrewFish(state) {
 async function stealFromBot() {
   await openShift();
   await walkTo(3.75, -0.25);
-  const victim = await takeCrewFish('carried');
+  const victim = await takeCrewFish();
   assert(victim.carrierId);
   const stolen = await read();
   assert.notEqual(stolen.players.find(({ id }) => id === victim.carrierId).carrying, victim.id);
@@ -299,10 +298,50 @@ async function stealFromBot() {
 }
 
 async function interceptThrow() {
-  await openShift();
-  await walkTo(4.7, 1.02);
-  await takeCrewFish('thrown');
-  console.log('从半空中截住一条机器人抛向秤盘的鱼');
+  // Deliver the input between frames so browser load cannot swallow the short catch window.
+  await page.clock.install();
+  await page.clock.pauseAt(Date.now() + 60_000);
+  const url = new URL(base);
+  url.search = new URLSearchParams({ seed: 'm2-review', day: '3', debug: '1' }).toString();
+  assert.equal((await page.goto(url.href, { waitUntil: 'domcontentloaded' }))?.status(), 200);
+  for (let tries = 0; tries < 100; tries++) {
+    if (await page.evaluate(() => !!window.fatfishDebug)) break;
+    await page.clock.runFor(100);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  const controls = createBrowserControls(page);
+  const station = { x: 4.7, z: 1.02 };
+  const axis = (delta) => Math.abs(delta) > 0.22 ? Math.sign(delta) : 0;
+  try {
+    for (let frame = 0; frame < 650; frame++) {
+      const state = await read();
+      const player = state.player;
+      const thrown = state.fish.find((fish) => fish.state === 'thrown' && fish.lastTouch !== player.id &&
+        Math.hypot(fish.position.x - player.position.x, fish.position.z - player.position.z) < 2.1 &&
+        Math.abs(fish.position.y - player.position.y) < 1.4 && fish.position.y > 0.85);
+      if (player.carrying) {
+        await controls.apply(state, { aim: { x: station.x, z: station.z + 4 }, interact: true });
+      } else if (thrown) {
+        await controls.apply(state, { aim: thrown.position, interact: true });
+        await page.clock.runFor(35);
+        const caught = await read();
+        if (caught.player.carrying === thrown.id && caught.notice?.text.includes('半空截胡')) {
+          console.log('从半空中截住一条机器人抛向秤盘的鱼');
+          return;
+        }
+      } else {
+        await controls.apply(state, {
+          moveX: axis(station.x - player.position.x),
+          moveZ: axis(station.z - player.position.z),
+        });
+      }
+      await page.clock.runFor(75);
+    }
+    throw new Error('未能截住队友抛出的鱼');
+  } finally {
+    await controls.stop();
+  }
 }
 
 async function botsAndStandings() {
