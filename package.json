@@ -23,6 +23,7 @@
     "test:m45": "node scripts/smoke-m45.mjs"
   },
   "dependencies": {
+    "@dimforge/rapier3d": "0.21.0",
     "@dimforge/rapier3d-compat": "0.21.0",
     "three": "0.186.1",
     "tsx": "4.23.15",

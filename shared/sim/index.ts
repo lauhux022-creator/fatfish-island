@@ -123,7 +123,8 @@ const FISHING_SHORE_Z = ISLAND.shoreZ - 0.12;
 let rapierReady: Promise<void> | undefined;
 
 export async function createSimulation(options: SimulationOptions = {}) {
-  rapierReady ??= RAPIER.init();
+  // The browser build imports WebAssembly as a module; Node initializes the compat package.
+  rapierReady ??= RAPIER.init?.() ?? Promise.resolve();
   await rapierReady;
   return new IslandSimulation(options);
 }

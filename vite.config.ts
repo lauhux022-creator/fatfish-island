@@ -1,7 +1,44 @@
 import { execFileSync } from 'node:child_process';
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig, loadEnv, type HtmlTagDescriptor, type Plugin } from 'vite';
 import { ROOM_SOCKET_PATH } from './shared/net/types.ts';
 import pkg from './package.json' with { type: 'json' };
+
+const BASE = '/fatfish-island/';
+
+function preloadGame(): Plugin {
+  return {
+    name: 'preload-game',
+    apply: 'build',
+    transformIndexHtml: {
+      order: 'post',
+      handler(_html, { chunk, bundle }) {
+        if (!chunk || !bundle) return;
+        const modules = new Set<string>();
+        const wasm = new Set<string>();
+        function collect(file: string) {
+          const entry = bundle?.[file];
+          if (entry?.type !== 'chunk' || modules.has(file)) return;
+          modules.add(file);
+          entry.imports.forEach(collect);
+          for (const asset of entry.viteMetadata?.importedAssets ?? []) {
+            if (asset.endsWith('.wasm')) wasm.add(asset);
+          }
+        }
+        chunk.dynamicImports.forEach(collect);
+        const preloads: HtmlTagDescriptor[] = Array.from(wasm, (file) => ({
+          tag: 'link',
+          attrs: { rel: 'preload', as: 'fetch', type: 'application/wasm', crossorigin: true, href: BASE + file },
+          injectTo: 'head',
+        }));
+        for (const file of modules) {
+          if (chunk.imports.includes(file)) continue;
+          preloads.push({ tag: 'link', attrs: { rel: 'modulepreload', crossorigin: true, href: BASE + file }, injectTo: 'head' });
+        }
+        return preloads;
+      },
+    },
+  };
+}
 
 function commitShortHash(): string {
   const sha = process.env.GITHUB_SHA;
@@ -22,7 +59,10 @@ export default defineConfig(({ mode }) => {
     : host.includes(':') ? `[${host}]` : host;
   const proxy = { [ROOM_SOCKET_PATH]: { target: `http://${backendHost}:${PORT}`, ws: true } };
   return {
-    base: '/fatfish-island/',
+    base: BASE,
+    plugins: [preloadGame()],
+    resolve: { alias: { '@dimforge/rapier3d-compat': '@dimforge/rapier3d' } },
+    optimizeDeps: { exclude: ['@dimforge/rapier3d'] },
     server: { host, proxy },
     preview: { host, proxy },
     define: {
