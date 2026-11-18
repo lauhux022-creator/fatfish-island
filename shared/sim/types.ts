@@ -145,6 +145,7 @@ export interface FishView extends Pose {
 export interface CrateView extends Pose {
   id: string;
   state: 'floating' | 'hooked' | 'loose' | 'carried' | 'thrown';
+  salvage: boolean;
 }
 
 export interface SimNotice {

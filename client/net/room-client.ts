@@ -180,7 +180,10 @@ function snapshotShape(value: unknown): value is SimSnapshot {
     && record(player.hook) && numbers(player.hook, ['charge', 'progress'])
     && (player.hook.position === null || vector(player.hook.position)))
     && value.fish.every((fish) => pose(fish) && numbers(fish, ['airCatchMultiplier'])
-      && (fish.popCatchUntil === null || numbers(fish, ['popCatchUntil']))) && value.crates.every(pose);
+      && (fish.popCatchUntil === null || numbers(fish, ['popCatchUntil'])))
+    && value.crates.every((crate) => pose(crate) && typeof crate.id === 'string' && typeof crate.salvage === 'boolean'
+      && (crate.state === 'floating' || crate.state === 'hooked' || crate.state === 'loose'
+        || crate.state === 'carried' || crate.state === 'thrown'));
 }
 
 function parseMessage(raw: unknown): RoomServerMessage | null {

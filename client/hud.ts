@@ -5,6 +5,7 @@ import { BUILD_KINDS, type CampaignCycleResult, type WarehouseView } from '../sh
 import { CAMPAIGN, ISLAND, PLAY, SHIFT } from '../shared/sim/config';
 import { DAILY_ORDERS } from '../shared/sim/orders';
 import { POPPER } from '../shared/sim/popper';
+import { SALVAGE } from '../shared/sim/salvage';
 import { SHOP, SHOP_ITEM_IDS } from '../shared/sim/shop';
 import type { FishView, ShiftEntry, SimSnapshot } from '../shared/sim/types';
 import { crewColor } from './crew-colors';
@@ -68,6 +69,14 @@ function fishingGuide(snapshot: SimSnapshot): Guide | undefined {
       return { title: '鱼在开会，等等', desktop: '浮标沉下去就开始收线。', touch: '浮标沉下去就开始收线。' };
     case 'bite':
     case 'reeling': {
+      if (snapshot.crates.some(item => item.salvage && item.id === hook.targetId)) {
+        return {
+          title: '钩到漂流补给了！',
+          desktop: '连点左键拖上岸，再按 E 搬。',
+          touch: '连点「投／收」拖上岸，再点「搬／扔」。',
+          meter: hook.progress,
+        };
+      }
       const baitMultiplier = snapshot.fish.find((item) => item.id === hook.targetId)?.baitMultiplier ?? 1;
       return {
         title: baitMultiplier > 1 ? `活饵溢价 ×${baitMultiplier}` :
@@ -149,6 +158,15 @@ function guideFor(snapshot: SimSnapshot): Guide {
   }
 
   if (player.carrying) {
+    if (snapshot.crates.some(item => item.salvage && item.id === player.carrying)) {
+      const reward = !player.equipment.popper ? SHOP.items.popper.name
+        : !player.equipment.bait ? SHOP.items.bait.name : `¥${SALVAGE.cashReward}`;
+      return {
+        title: `补给到手，交秤领${reward}`,
+        desktop: '天黑前走到橙秤旁，瞄准秤盘按 E。',
+        touch: '天黑前点橙色秤盘，再点「搬／扔」。',
+      };
+    }
     return {
       title: '箱子只能搬，不能卖',
       desktop: '朝空地按 E 把箱子扔出去。',
@@ -168,6 +186,15 @@ function guideFor(snapshot: SimSnapshot): Guide {
 
   const fishing = fishingGuide(snapshot);
   if (fishing) return fishing;
+
+  if (snapshot.crates.some(item => item.salvage && item.state === 'loose'
+    && item.position.y < 1.1 && Math.hypot(item.position.x - player.position.x, item.position.z - player.position.z) < 4.5)) {
+    return {
+      title: '把补给箱送上橙秤',
+      desktop: '靠近按 E 搬，天黑前交秤。',
+      touch: '靠近点「搬／扔」，天黑前交秤。',
+    };
+  }
 
   const distanceTo = (item: FishView) =>
     Math.hypot(item.position.x - player.position.x, item.position.z - player.position.z);

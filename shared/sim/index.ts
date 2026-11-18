@@ -15,6 +15,7 @@ import { CAMPAIGN_PACES, isCampaignPace, type CampaignPace } from './pace';
 import { POPPER, popperTarget, type PopperView } from './popper';
 import { resolveMovement, yawRotation } from './prediction';
 import { seededRandom } from './random';
+import { SALVAGE, salvageDrift } from './salvage';
 import { castChargeSeconds, isShopItemId, SHOP, weaponStats, type ShopEquipment, type ShopItemId } from './shop';
 import { emptyInput } from './types';
 import type {
@@ -62,11 +63,22 @@ interface Popper {
   endTick: number;
 }
 
+interface SalvageMotion {
+  anchor: Vec3;
+  startedAt: number;
+  direction: -1 | 1;
+}
+
+interface FloatingSalvage extends SalvageMotion {
+  id: string;
+}
+
 interface Crate {
   id: string;
   body: RigidBody;
   state: CrateView['state'];
   looseAt: number;
+  salvage: (SalvageMotion & { thrower: Actor | null }) | null;
 }
 
 interface Hook {
@@ -170,6 +182,14 @@ function distance(a: Direction, b: Direction) {
   return Math.hypot(a.x - b.x, a.z - b.z);
 }
 
+function inScale(point: Vec3) {
+  return distance(point, ISLAND.scale) <= ISLAND.scale.radius && Math.abs(point.y - ISLAND.scale.y) < 0.37;
+}
+
+function canHookCrate(hook: Vec3, crate: Vec3) {
+  return distance(hook, crate) < 0.74 && Math.abs(hook.y - crate.y) < 0.68;
+}
+
 function pose(body: RigidBody): Pose {
   return { position: body.translation(), rotation: body.rotation() };
 }
@@ -208,6 +228,9 @@ class IslandSimulation {
   private readonly world = new RAPIER.World({ x: 0, y: -PLAY.gravity, z: 0 });
   private readonly actors: Actor[];
   private readonly crates: Crate[];
+  private floatingSalvage: FloatingSalvage | null = null;
+  private salvageCrate: Crate | null = null;
+  private salvageSpawnedDay = 0;
   private readonly fish: Fish[] = [];
   private poppers: Popper[] = [];
   private readonly transferredFish = new Set<string>();
@@ -323,6 +346,7 @@ class IslandSimulation {
       controls[index] ?? (actor.bot ? this.bots.input(previous!, previous!.players[index]) : emptyInput));
 
     this.tick += 1;
+    this.updateSalvage();
     for (const [index, actor] of this.actors.entries()) {
       if (actor.recoverTick !== 0 && this.tick >= actor.recoverTick) this.recover(actor);
       const actorInput = inputs[index];
@@ -352,18 +376,23 @@ class IslandSimulation {
     this.updateFloppingFish();
     this.world.step();
     for (const actor of this.actors) this.updateFlyingHook(actor);
-    const completedOrder = this.updateOutcomes();
+    const receipts = this.updateOutcomes();
     if (this.phase === 'night' || this.phase === 'boss') this.updateDefense();
     if (this.phase === 'day' && this.tick >= this.shiftEnd) this.startNight();
     else if (this.phase === 'night' && this.tick >= this.shiftEnd) this.settleShift();
     else if (this.phase === 'boss' && this.defense.bossDefeated) this.phase = 'cleared';
-    if (completedOrder) this.announce(completedOrder.worker, completedOrder.notice, 'good');
+    if (receipts) for (const { worker, notice } of receipts) this.announce(worker, notice, 'good');
   }
 
   snapshot(): SimSnapshot {
     const players = this.actors.map((actor) => this.viewActor(actor));
     const player = players[0];
     const notices = Object.fromEntries([...this.notices].map(([id, notice]) => [id, { ...notice }]));
+    const crates: CrateView[] = this.crates.map(({ id, body, state, salvage }) => ({ id, state, salvage: salvage !== null, ...pose(body) }));
+    if (this.floatingSalvage) {
+      crates.push({ id: this.floatingSalvage.id, state: 'floating', salvage: true,
+        position: this.salvagePosition(this.floatingSalvage), rotation: yawRotation(0) });
+    }
     return {
       tick: this.tick,
       time: this.time,
@@ -407,7 +436,7 @@ class IslandSimulation {
           stealReady: !cargo && (state === 'thrown' || (state === 'carried' && this.time >= grabAgainAt)),
         })),
       poppers: this.poppers.map((popper) => this.viewPopper(popper)),
-      crates: this.crates.map(({ id, body, state }) => ({ id, state, ...pose(body) })),
+      crates,
       cash: player.cash,
       sold: player.sold,
       notice: notices[player.id] ?? null,
@@ -807,6 +836,8 @@ class IslandSimulation {
   private startNight() {
     this.phase = 'night';
     this.shiftEnd = this.tick + this.nightLength;
+    this.floatingSalvage = null;
+    if (this.salvageCrate) this.removeSalvage(this.salvageCrate);
     this.defense.startNight(this.day, this.time, this.dailyOrder.closeAtDusk());
     for (const actor of this.actors) {
       if (actor.hook.phase !== 'idle') this.clearHook(actor);
@@ -931,7 +962,74 @@ class IslandSimulation {
       .setCcdEnabled(true).setLinearDamping(0.1).setAngularDamping(0.8));
     this.world.createCollider(RAPIER.ColliderDesc.cuboid(halfSize, halfSize, halfSize)
       .setFriction(0.8).setRestitution(0.24).setDensity(id === 'training-crate' ? 3 : 0.68), body);
-    return { id, body, state, looseAt: 0 };
+    return { id, body, state, looseAt: 0, salvage: null };
+  }
+
+  private updateSalvage() {
+    if (this.phase !== 'day') return;
+    const elapsedTicks = this.tick + this.shiftLength - this.shiftEnd;
+    const spawnAt = Math.min(SALVAGE.spawnSeconds * TICKS_PER_SECOND, Math.floor(this.shiftLength / 2));
+    if (this.salvageSpawnedDay !== this.day && elapsedTicks >= spawnAt) {
+      const drift = seededRandom(`${this.seed}:salvage:${this.day}`);
+      this.floatingSalvage = { id: `salvage-${this.day}`, anchor: { ...SALVAGE.origin }, startedAt: this.time,
+        direction: drift() < 0.5 ? -1 : 1 };
+      this.salvageSpawnedDay = this.day;
+      for (const actor of this.actors) {
+        if (!actor.ghostPosition) this.announce(actor, '左侧外海漂来补给箱！钩回去扔进秤');
+      }
+    }
+    const crate = this.salvageCrate;
+    if (crate?.state !== 'floating' || !crate.salvage) return;
+    crate.body.setNextKinematicTranslation(this.salvagePosition(crate.salvage));
+  }
+
+  private salvagePosition({ anchor, startedAt, direction }: SalvageMotion) {
+    return salvageDrift(anchor, this.time - startedAt, direction);
+  }
+
+  private latchFloatingSalvage(hook: Vec3) {
+    const floating = this.floatingSalvage;
+    if (!floating) return null;
+    const position = this.salvagePosition(floating);
+    if (!canHookCrate(hook, position)) return null;
+
+    // Keep offshore drift out of the solver until a crew member hooks the box.
+    const { id, ...motion } = floating;
+    const crate = this.makeCrate(id, position, 'floating', SALVAGE.halfSize);
+    crate.salvage = { ...motion, thrower: null };
+    this.floatingSalvage = null;
+    this.salvageCrate = crate;
+    this.crates.push(crate);
+    return crate;
+  }
+
+  private anchorSalvage(crate: Crate, position: Vec3) {
+    if (!crate.salvage) return;
+    crate.salvage.anchor = { ...position, y: SALVAGE.origin.y };
+    crate.salvage.startedAt = this.time;
+    crate.salvage.thrower = null;
+  }
+
+  private removeSalvage(crate: Crate) {
+    if (this.salvageCrate !== crate) return;
+    for (const actor of this.actors) {
+      if (actor.carrying === crate) actor.carrying = null;
+      if (actor.hook.target === crate) this.clearHook(actor, false);
+    }
+    this.salvageCrate = null;
+    this.crates.splice(this.crates.indexOf(crate), 1);
+    this.world.removeRigidBody(crate.body);
+  }
+
+  private claimSalvage(crate: Crate) {
+    const worker = crate.salvage?.thrower;
+    if (!worker || crate.state !== 'thrown' || !inScale(crate.body.translation())) return null;
+    this.removeSalvage(crate);
+    const reward = !worker.equipment.popper ? 'popper' : !worker.equipment.bait ? 'bait' : null;
+    if (reward) worker.equipment[reward] = true;
+    else worker.cash += SALVAGE.cashReward;
+    const label = reward ? SHOP.items[reward].name : `¥${SALVAGE.cashReward}`;
+    return { worker, notice: `补给入库！领到 ${label}` };
   }
 
   private updatePlayer(actor: Actor, input: SimInput) {
@@ -1110,11 +1208,8 @@ class IslandSimulation {
   private crateByHook(actor: Actor) {
     const position = actor.hook.body?.translation();
     if (!position) return null;
-    return this.crates.find(({ body, state }) => {
-      if (state === 'carried' || state === 'hooked') return false;
-      const crate = body.translation();
-      return distance(position, crate) < 0.74 && Math.abs(position.y - crate.y) < 0.68;
-    }) ?? null;
+    return this.crates.find(({ body, state }) => state !== 'carried' && state !== 'hooked' && canHookCrate(position, body.translation()))
+      ?? this.latchFloatingSalvage(position);
   }
 
   private latchBait(owner: Actor, target: Actor) {
@@ -1303,7 +1398,8 @@ class IslandSimulation {
     target.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
     actor.hook.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
     actor.hook.body.setTranslation(actor.hook.start, true);
-    this.announce(actor, isCatch ? `${FISH[target.kind].name}咬钩！连点收线` : '箱子上钩！连点拖上岸', 'good');
+    this.announce(actor, isCatch ? `${FISH[target.kind].name}咬钩！连点收线`
+      : target.salvage ? '补给箱上钩！连点拖上岸' : '箱子上钩！连点拖上岸', 'good');
   }
 
   private reel(actor: Actor) {
@@ -1340,7 +1436,7 @@ class IslandSimulation {
         target.state = 'loose';
         target.body.setLinvel({ x: -direction.x / length, y: 1.7, z: 0.35 }, true);
         target.body.setAngvel({ x: 2.4, y: 0.8, z: 1.1 }, true);
-        this.announce(actor, '今日福利：一只空箱');
+        this.announce(actor, target.salvage ? '补给箱拖上岸了！按 E 搬去秤盘' : '今日福利：一只空箱');
       }
       this.clearHook(actor, false);
       return;
@@ -1371,6 +1467,7 @@ class IslandSimulation {
           target.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
         } else {
           target.state = 'floating';
+          this.anchorSalvage(target, position);
           target.body.setTranslation({ ...position, y: ISLAND.supplyCrate.y }, true);
         }
       }
@@ -1499,7 +1596,8 @@ class IslandSimulation {
     item.body.setTranslation(this.carryPoint(actor), true);
 
     if (!isFish(item)) {
-      this.announce(actor, '箱子搬起来了 · E 扔出');
+      if (item.salvage) item.salvage.thrower = null;
+      this.announce(actor, item.salvage ? '补给箱抬好了 · 瞄准秤盘扔进去' : '箱子搬起来了 · E 扔出');
       return;
     }
     const formerOwner = victim ?? interceptorVictim ?? this.actors.find(({ id }) => id === previousTouch);
@@ -1686,7 +1784,8 @@ class IslandSimulation {
     const origin = this.carryPoint(actor);
     const scaleDistance = distance(position, ISLAND.scale);
     const towardScale = (ISLAND.scale.x - position.x) * actor.aim.x + (ISLAND.scale.z - position.z) * actor.aim.z;
-    const assist = isFish(item) && scaleDistance <= ISLAND.scale.aimAssistDistance
+    const deliverable = isFish(item) || (!knockedLoose && item.salvage !== null);
+    const assist = deliverable && scaleDistance <= ISLAND.scale.aimAssistDistance
       && (scaleDistance < 0.6 || towardScale > scaleDistance * 0.58);
     const velocity = knockedLoose ?? (assist ? launchVector(origin, ISLAND.scale, 0.5)
       : { x: actor.aim.x * 6.35, y: 4.85, z: actor.aim.z * 6.35 });
@@ -1701,7 +1800,10 @@ class IslandSimulation {
       item.thrownBy = actor.id;
       item.wakeAt = this.time + PLAY.stunSeconds;
       this.touchFish(item, actor);
-    } else item.looseAt = this.time + 0.75;
+    } else {
+      item.looseAt = this.time + 0.75;
+      if (item.salvage) item.salvage.thrower = knockedLoose ? null : actor;
+    }
   }
 
   private updateFloppingFish() {
@@ -1745,15 +1847,14 @@ class IslandSimulation {
   }
 
   private updateOutcomes() {
-    let completedOrder: { worker: Actor; notice: string } | null = null;
+    let receipts: { worker: Actor; notice: string }[] | undefined;
     for (const fish of [...this.fish]) {
       const point = fish.body.translation();
       if (fish.state === 'flopping' && !onLand(point)) {
         fish.state = 'escaping';
         fish.escapeAt = this.time + PLAY.fishEscapeSeconds;
       }
-      if (fish.state === 'thrown' && fish.popFlightUntil === null && fish.lastTouch && distance(point, ISLAND.scale) <= ISLAND.scale.radius
-        && Math.abs(point.y - ISLAND.scale.y) < 0.37) {
+      if (fish.state === 'thrown' && fish.popFlightUntil === null && fish.lastTouch && inScale(point)) {
         const baitMultiplier = fish.baitPlayerId ? FISHING.baitPriceMultiplier : 1;
         const airCatchMultiplier = fish.airCaught ? POPPER.airCatchMultiplier : 1;
         const amount = Math.round(FISH[fish.kind].price * fish.multiplier * baitMultiplier * airCatchMultiplier * this.salePricePercent / 100);
@@ -1774,7 +1875,7 @@ class IslandSimulation {
           const orderWood = this.phase === 'day' && !worker.bot
             ? this.dailyOrder.recordSale(fish.kind, Boolean(fish.baitPlayerId || fish.airCaught)) : 0;
           const sale = `入账 ¥${amount} · ${FISH[fish.kind].name} ×${fish.multiplier.toFixed(2)}${bait}${trick}`;
-          if (orderWood) completedOrder = { worker, notice: `${sale} · 订单完成！今晚加发 ${orderWood} 漂流木` };
+          if (orderWood) (receipts ??= []).push({ worker, notice: `${sale} · 订单完成！今晚加发 ${orderWood} 漂流木` });
           else this.announce(worker, sale, 'good');
           this.requestBoss('sale', worker, `${worker.name}卖出${FISH[fish.kind].name}`, amount);
         }
@@ -1796,8 +1897,10 @@ class IslandSimulation {
       }
     }
 
-    for (const crate of this.crates) {
-      this.updateCrate(crate);
+    for (const crate of [...this.crates]) {
+      const claim = this.claimSalvage(crate);
+      if (claim) (receipts ??= []).push(claim);
+      else this.updateCrate(crate);
     }
 
     for (const actor of this.actors) {
@@ -1808,7 +1911,7 @@ class IslandSimulation {
         this.requestBoss('death', actor, `${actor.name}落水倒下，等待回岸`);
       }
     }
-    return completedOrder;
+    return receipts;
   }
 
   private updateCrate(crate: Crate) {
@@ -1817,6 +1920,7 @@ class IslandSimulation {
     const velocity = crate.body.linvel();
     if (point.y < ISLAND.seaY - 0.22) {
       crate.state = 'floating';
+      this.anchorSalvage(crate, point);
       crate.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
       crate.body.setTranslation({ ...point, y: ISLAND.supplyCrate.y }, true);
       crate.body.setRotation(yawRotation(0), true);
@@ -1824,6 +1928,7 @@ class IslandSimulation {
     }
     if (crate.state === 'thrown' && this.time > crate.looseAt && point.y < 0.72 && Math.abs(velocity.y) < 0.6) {
       crate.state = 'loose';
+      if (crate.salvage) crate.salvage.thrower = null;
     }
     const thrownInto = crate.state === 'thrown' && Math.hypot(velocity.x, velocity.y, velocity.z) > 2.8;
     for (const actor of this.actors) {

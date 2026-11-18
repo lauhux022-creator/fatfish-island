@@ -12,6 +12,7 @@ import { makeGeometryKit } from './assets/geometry';
 import { makeLiftMarkers } from './assets/lift-markers';
 import { createModels } from './assets/models';
 import { makeAirCatchMark, makePopperArt } from './assets/poppers';
+import { makeSalvageCrate, makeSalvageCue } from './assets/salvage';
 import { makeIsland } from './assets/world';
 import { crewColor } from './crew-colors';
 
@@ -96,6 +97,7 @@ export function createScene(canvas: HTMLCanvasElement) {
   const island = makeIsland(world, kit, appearances);
   const campaignArt = makeCampaignArt(world, kit, appearances);
   const popperArt = makePopperArt(world, kit);
+  const salvageCue = makeSalvageCue(world);
   const speechPoint = new T.Vector3();
   const workers = new Map<string, ReturnType<typeof createWorker>>();
   const fish = new Map<string, ReturnType<typeof models.fish> & {
@@ -104,7 +106,7 @@ export function createScene(canvas: HTMLCanvasElement) {
     lift: ReturnType<typeof makeLiftMarkers> | null;
     airCatch?: ReturnType<typeof makeAirCatchMark>;
   }>();
-  const crates = new Map<string, ReturnType<typeof models.crate>>();
+  const crates = new Map<string, { body: T.Group; flag?: T.Group; dispose?: () => void }>();
   const scalePosition = new T.Vector3(ISLAND.scale.x, ISLAND.groundY + 0.56, ISLAND.scale.z);
   const track = new T.RingGeometry(0.94, 1, 44);
   const saleRing = new T.Mesh(track, new T.MeshBasicMaterial({ color: 0xffec9c, transparent: true, opacity: 0, depthWrite: false }));
@@ -275,6 +277,9 @@ export function createScene(canvas: HTMLCanvasElement) {
     const transition = delta ? 1 - Math.exp(-2.8 * delta) : 1;
     defenseCamera = T.MathUtils.lerp(defenseCamera, campaign.phase === 'night' || campaign.phase === 'boss' ? 1 : 0, transition);
     let daytimeX = T.MathUtils.lerp(focus.x * 0.72, scalePosition.x, carryFocus);
+    if (carryFocus && snapshot.crates.some(item => item.salvage && item.id === snapshot.player.carrying)) {
+      daytimeX = Math.min(daytimeX, focus.x + 2.35);
+    }
     if (narrow > 0 && !snapshot.player.carrying) {
       const looseCargo = snapshot.fish.find(item => item.heavy && item.state === 'stunned'
         && Math.hypot(item.position.x - focus.x, item.position.z - focus.z) < 4.5);
@@ -493,20 +498,26 @@ export function createScene(canvas: HTMLCanvasElement) {
     }
 
     const active = new Set<string>();
+    let driftingCrate: Vec3 | undefined;
     for (const item of snapshot.crates) {
       active.add(item.id);
       let model = crates.get(item.id);
       if (!model) {
-        model = models.crate(world, item.id === 'training-crate');
+        model = item.salvage ? makeSalvageCrate(world, kit) : { body: models.crate(world, item.id === 'training-crate') };
         crates.set(item.id, model);
       }
-      pose(model, item);
+      pose(model.body, item);
+      if (model.flag) model.flag.rotation.y = Math.sin(seconds * 4.1) * 0.24;
+      if (item.salvage && item.state === 'floating') driftingCrate = item.position;
     }
     for (const [id, model] of crates) {
       if (active.has(id)) continue;
-      model.removeFromParent();
+      model.body.removeFromParent();
+      model.dispose?.();
       crates.delete(id);
     }
+    const cue = salvageCue.update(driftingCrate, camera, width, height);
+    if (canvas.dataset.salvageCue !== cue) canvas.dataset.salvageCue = cue;
   }
 
   function animateCrosshair(snapshot: SimSnapshot) {
@@ -667,6 +678,7 @@ export function createScene(canvas: HTMLCanvasElement) {
     island.dispose();
     campaignArt.dispose();
     popperArt.dispose();
+    salvageCue.dispose();
     appearances.dispose();
     const geometries = new Set<T.BufferGeometry>();
     const materials = new Set<T.Material>();

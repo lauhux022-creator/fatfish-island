@@ -160,7 +160,8 @@ test('the simulation clamps validated actions and discards invalid targets', asy
     assert.equal(chainChat().boss.line?.action, 'none');
     assert(sim.snapshot().players.every(({ ragdoll }) => ragdoll === 0));
     assert.equal(chainChat().boss.priceMultiplier, 1 + BOSS.priceStep[1] / 100);
-    assert.equal(chainChat().crates.length, initial.crates.length + BOSS.rewardCrates.length);
+    const spawned = chainChat().crates.filter(({ salvage }) => !salvage);
+    assert.equal(spawned.length, initial.crates.length + BOSS.rewardCrates.length);
     const noUnearnedBonus = chainChat();
     assert.equal(noUnearnedBonus.boss.line?.action, 'none');
     assert.equal(noUnearnedBonus.player.cash, initial.player.cash);

@@ -1,6 +1,6 @@
 {
   "name": "fatfish-island",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -32,7 +32,9 @@
     "test:popper": "node --import tsx --test scripts/popper.test.ts",
     "test:m9": "node scripts/smoke-m9.mjs",
     "test:orders": "node --import tsx --test scripts/orders.test.ts",
-    "test:m10": "node scripts/smoke-m10.mjs"
+    "test:m10": "node scripts/smoke-m10.mjs",
+    "test:salvage": "node --import tsx --test scripts/salvage.test.ts",
+    "test:m11": "node scripts/smoke-m11.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.21.0",
