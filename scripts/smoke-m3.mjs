@@ -134,7 +134,7 @@ try {
 
   const argued = await chat('收鱼能涨价吗', 'price_change');
   assert(argued.boss.priceMultiplier >= 1.03);
-  const complaint = await chat('老板，桶桶偷鱼，我来告状', 'fine');
+  const complaint = await chat(`老板，${argued.players[2].name}偷鱼，我来告状`, 'fine');
   assert(complaint.boss.line.target === 'player' || complaint.boss.line.target === 'bot-2');
   await photo('04-complaint');
   console.log('交鱼砍价、拍马屁加好感、贿赂扣款、讨价与告状裁决通过');

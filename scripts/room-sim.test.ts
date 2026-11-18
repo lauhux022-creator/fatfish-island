@@ -8,11 +8,14 @@ import { emptyInput } from '../shared/sim/types';
 const stillBots = { 'bot-1': emptyInput, 'bot-2': emptyInput, 'bot-3': emptyInput };
 
 test('each occupied seat receives only its own movement, and prediction reuses the same steering', async () => {
-  const sim = await createSimulation();
+  const sim = await createSimulation({ roleId: 'claude' });
   try {
     for (const seat of CREW) sim.setSeat(seat.id, `工友 ${seat.id}`);
     for (let tick = 0; tick < 10; tick++) sim.step(emptyInput);
     const before = sim.snapshot();
+    assert.equal(before.player.roleId, 'claude');
+    assert.equal(before.player.animation, 'idle');
+    assert.deepEqual(new Set(before.players.map(({ roleId }) => roleId)), new Set(['claude', 'gpt', 'grok', 'kimi']));
     const movePrimary = { ...emptyInput, moveX: 1 };
     const moveGuest = { ...emptyInput, moveX: -1 };
     const predicted = predictPlayerMovement(before.player, movePrimary);
@@ -68,12 +71,14 @@ test('a departing host becomes a working bot without resetting the seat ledger o
     sim.step({ ...emptyInput, castPressed: true, castHeld: true }, stillBots);
     const before = sim.snapshot().player;
     assert.equal(before.hook.phase, 'charging');
+    assert.equal(before.animation, 'box_01');
     assert(before.favor > 0);
 
     sim.setSeat('player', null);
     const substitute = sim.snapshot().player;
     assert(substitute.bot);
-    assert.equal(substitute.name, '阿班');
+    assert.equal(substitute.name, 'GPT');
+    assert.equal(substitute.roleId, before.roleId);
     assert.equal(substitute.hook.phase, 'idle');
     assert.deepEqual(substitute.position, before.position);
     assert.equal(substitute.cash, before.cash);
@@ -111,6 +116,8 @@ test('friendly fire sends different notices to the attacker and victim', async (
     });
     const hit = sim.snapshot();
     assert(hit.player.ragdoll > 0);
+    assert.equal(hit.player.animation, 'fall');
+    assert.equal(hit.players[2].animation, 'chop');
     assert.deepEqual(hit.notice, hit.notices.player);
     assert.equal(hit.notices.player?.text, '木桶把你一桨拍飞！');
     assert.equal(hit.notices['bot-2']?.text, '一桨拍飞了船长！');

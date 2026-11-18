@@ -1,6 +1,7 @@
 import * as T from 'three';
 import { ISLAND, PLAY } from '../shared/sim/config';
 import type { FishState, PlayerView, Pose, SimSnapshot, Vec3 } from '../shared/sim/types';
+import { createActorAssets, makeActor } from './assets/actors';
 import { crewBadge } from './assets/crew-badge';
 import { makeGeometryKit } from './assets/geometry';
 import { createModels } from './assets/models';
@@ -58,17 +59,21 @@ export function createScene(canvas: HTMLCanvasElement) {
   const aimHit = new T.Vector3();
   const cursor = new T.Vector2();
   const rodTip = new T.Vector3();
+  const handPoint = new T.Vector3();
   let width = 0;
   let height = 0;
   let previous = -1;
+  let previousAnimationTime = -1;
   let aimPoint: { x: number; z: number } | null = null;
   let aimingAtCrew = false;
   let localPlayerId = '';
   let crewViews: PlayerView[] = [];
 
   const kit = makeGeometryKit();
+  const appearances = createActorAssets();
+  let priorityModels: Promise<unknown> | undefined;
   const models = createModels(kit);
-  const island = makeIsland(world, kit);
+  const island = makeIsland(world, kit, appearances);
   const speechPoint = new T.Vector3();
   const workers = new Map<string, ReturnType<typeof createWorker>>();
   const fish = new Map<string, ReturnType<typeof models.fish> & { state: FishState; carrierId: string | null }>();
@@ -95,6 +100,10 @@ export function createScene(canvas: HTMLCanvasElement) {
   function createWorker(view: PlayerView, index: number) {
     const accent = crewColor(view.id);
     const model = models.worker(world, view.id);
+    const actor = makeActor(model.yaw, appearances, 1.68, Math.PI);
+    actor.pivot.position.y = -0.76;
+    const rodOrigin = model.rod.position.clone();
+    const paddleOrigin = model.paddle.position.clone();
     const badge = crewBadge(world, view.id === localPlayerId ? '你' : view.name, accent);
     const lineColor = view.bot ? new T.Color(accent).lerp(new T.Color(0xfffaf0), 0.6) : new T.Color(0xffeea8);
     const lineGeometry = new T.BufferGeometry();
@@ -126,7 +135,7 @@ export function createScene(canvas: HTMLCanvasElement) {
     });
 
     return {
-      model, badge, lineColor, line, linePoints, bobber, bite, splash, shockwave, shockArcs,
+      model, actor, rodOrigin, paddleOrigin, badge, lineColor, line, linePoints, bobber, bite, splash, shockwave, shockArcs,
       walk: (index * 2.3) % (Math.PI * 2), ragdoll: false, wet: false, splashAt: -10,
     };
   }
@@ -219,13 +228,15 @@ export function createScene(canvas: HTMLCanvasElement) {
   }
 
   function animatePlayer(view: PlayerView, worker: ReturnType<typeof createWorker>, delta: number, seconds: number) {
-    const { model: player, shockwave, shockArcs } = worker;
+    const { model: player, actor, shockwave, shockArcs } = worker;
     const ragdolled = view.parts.length > 0;
     const entangled = Boolean(view.baitedBy);
     const moved = Math.min(1, view.speed / PLAY.moveSpeed);
     const swing = view.swing;
     player.yaw.visible = !ragdolled;
     for (const hat of player.hats) hat.visible = view.optimization;
+    player.loadedHat.visible = actor.ready && view.optimization;
+    for (const piece of player.standing.values()) piece.visible = !actor.ready;
     for (const member of player.ragdoll.values()) member.visible = false;
     for (const member of view.parts) {
       const model = player.ragdoll.get(member.limb);
@@ -251,6 +262,7 @@ export function createScene(canvas: HTMLCanvasElement) {
 
     player.yaw.position.set(view.position.x, view.position.y, view.position.z);
     player.yaw.rotation.y = view.yaw;
+    actor.play(view.animation, delta);
     worker.walk += delta * 10.5 * moved;
     const walk = worker.walk;
     const stride = Math.sin(walk);
@@ -280,6 +292,15 @@ export function createScene(canvas: HTMLCanvasElement) {
     } else {
       rightArm.rotation.z = entangled ? 0.38 : 0;
     }
+    if (actor.hand) {
+      actor.hand.getWorldPosition(handPoint);
+      player.body.worldToLocal(handPoint);
+      player.rod.position.set(handPoint.x, handPoint.y + 0.13, handPoint.z - 0.20);
+      player.paddle.position.copy(handPoint);
+    } else {
+      player.rod.position.copy(worker.rodOrigin);
+      player.paddle.position.copy(worker.paddleOrigin);
+    }
 
     shockwave.visible = swing > 0.12 && swing < 0.79 && !ragdolled;
     shockwave.position.set(view.position.x, view.position.y - 0.17, view.position.z);
@@ -291,6 +312,8 @@ export function createScene(canvas: HTMLCanvasElement) {
   function animateCrew(snapshot: SimSnapshot, delta: number, seconds: number, selfId: string | null) {
     localPlayerId = selfId ?? '';
     crewViews = snapshot.players;
+    priorityModels ??= Promise.all([appearances.load('feiyu'), appearances.load(snapshot.player.roleId)]);
+    const loadedRoles: string[] = [];
     const badgeLayout: { x: number; y: number; width: number; height: number }[] = [];
     const unitsPerPixel = 2 * Math.tan(T.MathUtils.degToRad(camera.fov / 2)) / height;
     for (const view of crewViews) {
@@ -299,6 +322,8 @@ export function createScene(canvas: HTMLCanvasElement) {
         worker = createWorker(view, workers.size);
         workers.set(view.id, worker);
       }
+      worker.actor.use(view.roleId, view.id === localPlayerId ? undefined : priorityModels);
+      if (worker.actor.id) loadedRoles.push(worker.actor.id);
       animatePlayer(view, worker, delta, seconds);
       animateHook(view, worker, seconds);
 
@@ -308,7 +333,7 @@ export function createScene(canvas: HTMLCanvasElement) {
       badge.resize(unitsPerPixel);
       const head = view.parts.find(part => part.limb === 'head')?.position;
       const anchor = head ?? view.position;
-      const headroom = (head ? 0.41 : 0.87) + (view.optimization ? 0.3 : 0);
+      const headroom = (head ? 0.41 : 1.0) + (view.optimization ? 0.32 : 0);
       badge.sprite.position.set(anchor.x, Math.max(anchor.y + headroom, 0.37), anchor.z);
       projection.copy(badge.sprite.position).project(camera);
       const x = (projection.x + 1) * 0.5 * width;
@@ -321,6 +346,8 @@ export function createScene(canvas: HTMLCanvasElement) {
       badge.sprite.center.y = (y + badge.pixelHeight - foot) / badge.pixelHeight;
       badgeLayout.push({ x, y, width: badge.pixelWidth, height: badge.pixelHeight });
     }
+    const ready = loadedRoles.join(',');
+    if (canvas.dataset.loadedRoles !== ready) canvas.dataset.loadedRoles = ready;
   }
 
   function animateFish(snapshot: SimSnapshot, seconds: number) {
@@ -448,9 +475,14 @@ export function createScene(canvas: HTMLCanvasElement) {
   function render(snapshot: SimSnapshot, elapsed: number, bossSpeaking: boolean, selfId: string | null = snapshot.player.id) {
     const delta = previous < 0 ? 0 : Math.min(0.1, Math.max(0, elapsed - previous));
     previous = elapsed;
+    const animationTime = performance.now() / 1000;
+    const animationDelta = previousAnimationTime < 0 ? 0 : Math.min(0.1, Math.max(0, animationTime - previousAnimationTime));
+    previousAnimationTime = animationTime;
     frameCamera(snapshot, delta);
-    island.animate(elapsed, snapshot.boss.line?.emotion ?? 'calm', bossSpeaking);
-    animateCrew(snapshot, delta, elapsed, selfId);
+    island.animate(elapsed, animationDelta, snapshot.boss.line?.emotion ?? 'calm', bossSpeaking);
+    const bossModel = island.bossModel;
+    if (canvas.dataset.bossModel !== bossModel) canvas.dataset.bossModel = bossModel;
+    animateCrew(snapshot, animationDelta, elapsed, selfId);
     animateFish(snapshot, elapsed);
     animateCrosshair(snapshot);
     animateEffects(snapshot, elapsed);
@@ -458,6 +490,9 @@ export function createScene(canvas: HTMLCanvasElement) {
   }
 
   function dispose() {
+    for (const { actor } of workers.values()) actor.dispose();
+    island.dispose();
+    appearances.dispose();
     const geometries = new Set<T.BufferGeometry>();
     const materials = new Set<T.Material>();
     world.traverse(object => {

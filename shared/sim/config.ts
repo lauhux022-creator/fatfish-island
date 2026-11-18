@@ -15,11 +15,13 @@ export const ISLAND = {
 } as const;
 
 export const CREW = [
-  { id: 'player', name: '你', bot: false, spawn: ISLAND.spawn },
-  { id: 'bot-1', name: '阿铲', bot: true, spawn: { x: -5.4, y: ISLAND.spawn.y, z: -1.8 } },
-  { id: 'bot-2', name: '桶桶', bot: true, spawn: { x: 2.95, y: ISLAND.spawn.y, z: -1.05 } },
-  { id: 'bot-3', name: '溜溜', bot: true, spawn: { x: 7.3, y: ISLAND.spawn.y, z: -1.9 } },
+  { id: 'player', bot: false, spawn: ISLAND.spawn },
+  { id: 'bot-1', bot: true, spawn: { x: -5.4, y: ISLAND.spawn.y, z: -1.8 } },
+  { id: 'bot-2', bot: true, spawn: { x: 2.95, y: ISLAND.spawn.y, z: -1.05 } },
+  { id: 'bot-3', bot: true, spawn: { x: 7.3, y: ISLAND.spawn.y, z: -1.9 } },
 ] as const;
+
+export const WORKER_MOTION = { walkSpeed: 0.18, runSpeed: 4.15, castSeconds: 0.38 } as const;
 
 export const PLAY = {
   gravity: 18,
@@ -128,10 +130,16 @@ export const BOTS = {
   crewChance: 0.62,
   leaderWeight: 3.1,
   interferenceWeight: 0.84,
+  roles: {
+    claude: { stealChance: 0.48, pursuitFactor: 0.98, workBreakFactor: 1, rivalMemory: 0 },
+    gpt: { stealChance: 0.55, pursuitFactor: 1, workBreakFactor: 0.85, rivalMemory: 0 },
+    grok: { stealChance: 0.72, pursuitFactor: 1.02, workBreakFactor: 1, rivalMemory: 0 },
+    kimi: { stealChance: 0.62, pursuitFactor: 1, workBreakFactor: 1, rivalMemory: 0.22 },
+  },
   profiles: {
-    player: { station: 0, depthOffset: 0.71, drop: { x: 4.3, z: 1.35 }, start: 5.5, jumpChance: 0.28, stealChance: 0.55 },
-    'bot-1': { station: 0, depthOffset: 0.07, drop: { x: 3.8, z: 0.35 }, start: 5.9, jumpChance: 0.16, stealChance: 0.52 },
-    'bot-2': { station: 1, depthOffset: -0.48, drop: { x: 4.15, z: -0.18 }, start: 6.7, jumpChance: 0.40, stealChance: 0.62 },
-    'bot-3': { station: 1, depthOffset: 0.62, drop: { x: 4.15, z: 1.15 }, start: 7.9, jumpChance: 0.22, stealChance: 0.71 },
+    player: { station: 0, depthOffset: 0.71, drop: { x: 4.3, z: 1.35 }, start: 5.5, jumpChance: 0.28 },
+    'bot-1': { station: 0, depthOffset: 0.07, drop: { x: 3.8, z: 0.35 }, start: 5.9, jumpChance: 0.16 },
+    'bot-2': { station: 1, depthOffset: -0.48, drop: { x: 4.15, z: -0.18 }, start: 6.7, jumpChance: 0.40 },
+    'bot-3': { station: 1, depthOffset: 0.62, drop: { x: 4.15, z: 1.15 }, start: 7.9, jumpChance: 0.22 },
   },
 } as const;

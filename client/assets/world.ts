@@ -2,8 +2,9 @@ import * as T from 'three';
 import type { FishEmotion } from '../../shared/fish-brain/types';
 import { FISHING, ISLAND } from '../../shared/sim/config';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import type { ActorAssets } from './actors';
 import { label, palette as p, seededDecor, type GeometryKit, type Tint } from './geometry';
-import { makeBoss } from './models';
+import { makeBoss, makeFeiyu } from './models';
 
 const shore = [
   [-9.86, -3.25], [-8.97, -3.92], [-6.25, -4.00], [-3.20, -4.02],
@@ -304,7 +305,7 @@ function mergeStatic(root: T.Group) {
   }
 }
 
-export function makeIsland(parent: T.Scene, kit: GeometryKit) {
+export function makeIsland(parent: T.Scene, kit: GeometryKit, assets: ActorAssets) {
   const landscape = kit.group(parent);
   const seaTime = water(parent);
   background(landscape, kit);
@@ -319,6 +320,7 @@ export function makeIsland(parent: T.Scene, kit: GeometryKit) {
     kit.rock(landscape, i % 3 ? 0xa48a60 : 0xb99a6f, x, 0.03, z, w * 1.3, w * 0.83, w);
   }
   const boss = makeBoss(parent, kit);
+  const feiyu = makeFeiyu(parent, kit, assets);
   const foam = shorelineFoam(parent);
   const bossRipples = [ring(parent, 0xbbe3b7, 0.7, -0.417, -18, 3.81, 2.16, 0.016, 0.68), ring(parent, 0xa5d5b5, 0.7, -0.419, -18, 5.21, 3.03, 0.012, 0.45)];
   const ripples = FISHING.goodSpots.map(({ x, z }, index) => {
@@ -328,11 +330,13 @@ export function makeIsland(parent: T.Scene, kit: GeometryKit) {
   });
   mergeStatic(landscape);
 
-  function animate(seconds: number, emotion: FishEmotion, speaking: boolean) {
+  function animate(seconds: number, delta: number, emotion: FishEmotion, speaking: boolean) {
     seaTime.value = seconds;
     boss.fish.position.y = 0.29 + Math.sin(seconds * 1.1) * 0.13;
     boss.fish.rotation.z = Math.sin(seconds * 0.72) * 0.023;
-    boss.express(emotion, seconds, speaking);
+    boss.fish.visible = !feiyu.actor.ready;
+    if (boss.fish.visible) boss.express(emotion, seconds, speaking);
+    feiyu.animate(seconds, delta, emotion, speaking);
     for (const [index, bits] of foam.entries()) {
       bits.material.opacity = 0.23 + Math.sin(seconds * 1.20 + index * 0.57) * 0.13 + 0.17;
     }
@@ -347,5 +351,10 @@ export function makeIsland(parent: T.Scene, kit: GeometryKit) {
     }
   }
 
-  return { animate, bossSpeechAnchor: boss.speechAnchor };
+  return {
+    animate,
+    dispose: feiyu.actor.dispose,
+    get bossModel() { return feiyu.actor.ready ? 'feiyu' : 'procedural'; },
+    get bossSpeechAnchor() { return feiyu.actor.ready ? feiyu.speechAnchor : boss.speechAnchor; },
+  };
 }

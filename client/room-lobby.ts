@@ -1,4 +1,5 @@
 import { ROOM_CODE_PATTERN, ROOM_MAX_NAME, ROOM_SOCKET_PATH } from '../shared/net/types';
+import { WORKER_ROLE_IDS, WORKER_ROLES, isWorkerRoleId, type WorkerRoleId } from '../shared/sim/cast';
 import type { RoomClientStatus, RoomConnectIntent } from './net/room-client';
 
 const markup = `
@@ -11,6 +12,10 @@ const markup = `
   </div>
   <form class="room-form" data-room-form>
     <label>工牌名<input type="text" maxlength="${ROOM_MAX_NAME}" autocomplete="off" placeholder="打工人" data-room-name></label>
+    <label>角色<select data-room-character>
+      <option value="">加入时自动分配</option>
+      ${WORKER_ROLE_IDS.map((id) => `<option value="${id}">${WORKER_ROLES[id].name}</option>`).join('')}
+    </select></label>
     <div class="room-form-actions">
       <button type="button" class="room-create" data-room-create>创建房间</button>
       <label class="room-code-field">房间码<input type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4"
@@ -62,6 +67,7 @@ function roomEndpoint(value: string): string | null {
 export function createRoomLobby(
   app: HTMLElement,
   controls: { connect(intent: RoomConnectIntent): void; leave(): void },
+  preferred: WorkerRoleId,
 ) {
   const tools = document.createElement('div');
   tools.className = 'account-tools';
@@ -99,6 +105,7 @@ export function createRoomLobby(
   const address = find<HTMLDetailsElement>('[data-room-address]');
   const name = find<HTMLInputElement>('[data-room-name]');
   const code = find<HTMLInputElement>('[data-room-code-input]');
+  const character = find<HTMLSelectElement>('[data-room-character]');
   const create = find<HTMLButtonElement>('[data-room-create]');
   const join = find<HTMLButtonElement>('[data-room-join]');
   const feedback = find<HTMLElement>('[data-room-feedback]');
@@ -118,9 +125,10 @@ export function createRoomLobby(
       endpoint.focus();
       return;
     }
-    const workerName = [...name.value.trim()].slice(0, ROOM_MAX_NAME).join('') || '打工人';
+    const workerName = [...name.value.trim()].slice(0, ROOM_MAX_NAME).join('');
+    const roleId = isWorkerRoleId(character.value) ? character.value : roomCode ? undefined : preferred;
     feedback.textContent = '';
-    controls.connect({ url, name: workerName, code: roomCode });
+    controls.connect({ url, name: workerName, code: roomCode, roleId });
   }
 
   toggle.addEventListener('click', () => {

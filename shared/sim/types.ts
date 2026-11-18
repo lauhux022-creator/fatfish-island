@@ -1,4 +1,5 @@
 import type { FishBrainOutput, FishTrigger } from '../fish-brain/types';
+import type { WorkerAnimation, WorkerRoleId } from './cast';
 
 export interface Vec3 {
   x: number;
@@ -65,6 +66,8 @@ export interface ShiftMetrics {
 
 export interface PlayerView extends Pose {
   id: string;
+  roleId: WorkerRoleId;
+  animation: WorkerAnimation;
   velocity: Vec3;
   name: string;
   bot: boolean;
@@ -127,11 +130,12 @@ export interface SimNotice {
   id: number;
   text: string;
   tone: 'info' | 'good' | 'bad';
-  cue?: 'fish_escape';
+  cue?: 'fish_escape' | 'fish_hit' | 'water_fall';
 }
 
 export interface ShiftEntry {
   id: string;
+  roleId: WorkerRoleId;
   name: string;
   bot: boolean;
   rank: number;

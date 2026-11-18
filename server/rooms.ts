@@ -8,6 +8,7 @@ import {
   type RoomServerMessage,
 } from '../shared/net/types';
 import { createSimulation } from '../shared/sim';
+import type { WorkerRoleId } from '../shared/sim/cast';
 import { CREW, TICKS_PER_SECOND } from '../shared/sim/config';
 import { emptyInput, type SimInput } from '../shared/sim/types';
 import { createOnlineFishBrain, DeepSeekBrain } from './fish-brain';
@@ -69,6 +70,7 @@ const errors: Record<RoomErrorCode, string> = {
   invalid: '这张工牌不对，检查房间码再试。',
   not_found: '没找到这间渔场，房间可能已经关门。',
   full: '渔场满员了，等一个工位空出来再试。',
+  character_taken: '这个角色已由其他玩家选择，请换个角色或自动分配。',
   unavailable: '渔场暂时开不了门，稍后再试。',
   active_session: '原来的工牌还在打卡，等它断开再重连。',
   forbidden: '观战工牌不能操作船员。',
@@ -148,18 +150,19 @@ export function attachRoomServer(
     send(peer, { type: 'snapshot', serverTick: room.serverTick, ack: peer.ack, state: room.sim.snapshot() });
   }
 
-  function join(peer: Peer, room: Room, name: string) {
+  function join(peer: Peer, room: Room, name: string, roleId?: WorkerRoleId) {
     const occupied = new Set([...room.peers].map(({ seat }) => seat));
-    const seatIndex = CREW.findIndex(({ id }) => !occupied.has(id));
-    if (seatIndex < 0) return error(peer, 'full');
-    const id = CREW[seatIndex].id;
+    const available = CREW.find(({ id }) => !occupied.has(id));
+    if (!available) return error(peer, 'full');
+    const id = roleId ? room.sim.seatForRole(roleId) : available.id;
+    if (!id || occupied.has(id)) return error(peer, 'character_taken');
     if (room.tickets.size >= MAX_TICKETS) {
       const expired = [...room.tickets.values()].find(({ peer: current }) => !current);
       if (expired) room.tickets.delete(expired.token);
     }
     const ticket = { token: randomBytes(18).toString('base64url'), focusId: id, peer };
     room.tickets.set(ticket.token, ticket);
-    room.sim.setSeat(id, name || `工友 ${seatIndex + 1}`);
+    room.sim.setSeat(id, name);
     attach(peer, room, id, ticket);
   }
 
@@ -190,6 +193,7 @@ export function attachRoomServer(
         seed: message.seed ?? randomBytes(8).toString('hex'),
         day: message.day,
         shiftSeconds: message.shiftSeconds,
+        roleId: message.roleId,
         brain,
       });
       if (closed || peer.socket.readyState !== WebSocket.OPEN) {
@@ -206,7 +210,7 @@ export function attachRoomServer(
         emptySince: null,
       };
       rooms.set(code, room);
-      join(peer, room, message.name);
+      join(peer, room, message.name, message.roleId);
     } catch {
       error(peer, 'unavailable');
     } finally {
@@ -236,7 +240,7 @@ export function attachRoomServer(
     }
     const room = rooms.get(message.code);
     if (!room) return error(peer, 'not_found');
-    if (message.type === 'join') join(peer, room, message.name);
+    if (message.type === 'join') join(peer, room, message.name, message.roleId);
     else resume(peer, room, message.token);
   }
 

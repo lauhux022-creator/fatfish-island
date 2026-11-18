@@ -27,6 +27,7 @@ interface Brain {
   mischiefAt: number;
   reconsiderAt: number;
   pursuit: Pursuit | null;
+  previousRival: string | null;
   crossed: boolean;
   throwAt: number;
 }
@@ -87,7 +88,7 @@ function isInTraffic(worker: PlayerView) {
     distance(worker.position, BOTS.crossing) < BOTS.crossingReach);
 }
 
-function chooseRival(snapshot: SimSnapshot, player: PlayerView, claims: Map<string, Claim>) {
+function chooseRival(snapshot: SimSnapshot, player: PlayerView, claims: Map<string, Claim>, previousRival: string | null) {
   const leader = snapshot.players.reduce((current, candidate) =>
     candidate.shiftCash > current.shiftCash ||
       (candidate.shiftCash === current.shiftCash && candidate.shiftSold > current.shiftSold) ? candidate : current);
@@ -99,7 +100,8 @@ function chooseRival(snapshot: SimSnapshot, player: PlayerView, claims: Map<stri
     if (claim && claim.until > snapshot.time) continue;
     const range = distance(player.position, rival.position);
     if (range > BOTS.mischiefReach) continue;
-    const score = range + rival.metrics.interference * BOTS.interferenceWeight
+    const remembered = rival.id === previousRival ? BOTS.roles[player.roleId].rivalMemory : 0;
+    const score = range + rival.metrics.interference * BOTS.interferenceWeight - remembered
       - (rival === leader && leader.shiftCash > 0 ? BOTS.leaderWeight : 0)
       - (rival.carrying ? 0.95 : 0);
     if (score < best) {
@@ -114,6 +116,7 @@ function endPursuit(brain: Brain, player: PlayerView, claims: Map<string, Claim>
   const pursuit = brain.pursuit;
   if (!pursuit) return;
   if (acted) {
+    brain.previousRival = pursuit.victim;
     claims.set(pursuit.victim, { hunter: player.id, until: time + BOTS.victimRest });
     brain.mischiefAt = time + sample(brain.random, BOTS.mischiefCooldown);
   } else if (claims.get(pursuit.victim)?.hunter === player.id) {
@@ -123,16 +126,17 @@ function endPursuit(brain: Brain, player: PlayerView, claims: Map<string, Claim>
   brain.reconsiderAt = time + sample(brain.random, BOTS.rethinkSeconds);
 }
 
-function mischiefInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, profile: Profile, claims: Map<string, Claim>): SimInput | undefined {
+function mischiefInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, claims: Map<string, Claim>): SimInput | undefined {
   const { time } = snapshot;
   if (time < brain.mischiefAt) return undefined;
   if (!brain.pursuit) {
     if (time < brain.reconsiderAt) return undefined;
     brain.reconsiderAt = time + sample(brain.random, BOTS.rethinkSeconds);
-    const pick = chooseRival(snapshot, player, claims);
-    if (!pick || brain.random() >= (pick.leads ? BOTS.leaderChance : BOTS.crewChance)) return undefined;
+    const role = BOTS.roles[player.roleId];
+    const pick = chooseRival(snapshot, player, claims, brain.previousRival);
+    if (!pick || brain.random() >= (pick.leads ? BOTS.leaderChance : BOTS.crewChance) * role.pursuitFactor) return undefined;
     const until = time + BOTS.chaseSeconds;
-    const steal = player.hook.phase === 'idle' && brain.random() < profile.stealChance;
+    const steal = player.hook.phase === 'idle' && brain.random() < role.stealChance;
     brain.pursuit = { victim: pick.rival.id, steal, until };
     claims.set(pick.rival.id, { hunter: player.id, until });
   }
@@ -180,7 +184,7 @@ function deliveryInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, 
   }
   if (!brain.throwAt) brain.throwAt = snapshot.time + sample(brain.random, BOTS.throwWindup);
   if (snapshot.time < brain.throwAt) return { ...emptyInput, aim: ISLAND.scale };
-  brain.nextCastAt = snapshot.time + sample(brain.random, BOTS.shiftBreak);
+  brain.nextCastAt = snapshot.time + sample(brain.random, BOTS.shiftBreak) * BOTS.roles[player.roleId].workBreakFactor;
   brain.station = (brain.station + 1) % FISHING.goodSpots.length;
   return { ...emptyInput, aim: ISLAND.scale, interactPressed: true };
 }
@@ -235,7 +239,7 @@ function workInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, prof
     };
   }
 
-  const mischief = mischiefInput(snapshot, player, brain, profile, claims);
+  const mischief = mischiefInput(snapshot, player, brain, claims);
   if (mischief) return mischief;
   if (snapshot.time < brain.nextCastAt - 1.5) return { ...emptyInput, aim: castAim };
   if (distance(origin, lane) > 0.36) return { ...emptyInput, ...steer(origin, lane, 0.25), aim: castAim };
@@ -270,6 +274,7 @@ export function createBotController(seed: string) {
           mischiefAt: sample(random, BOTS.firstMischief),
           reconsiderAt: 0,
           pursuit: null,
+          previousRival: null,
           crossed: false,
           throwAt: 0,
         };

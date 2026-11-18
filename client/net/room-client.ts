@@ -2,6 +2,7 @@ import {
   ROOM_CODE_PATTERN, ROOM_MAX_NAME, ROOM_SNAPSHOT_HZ,
   type RoomBrain, type RoomClientMessage, type RoomServerMessage, type RoomSnapshotMessage, type RoomWelcome,
 } from '../../shared/net/types';
+import { isWorkerAnimation, isWorkerRoleId, type WorkerRoleId } from '../../shared/sim/cast';
 import { STEP_SECONDS } from '../../shared/sim/config';
 import { predictPlayerMovement } from '../../shared/sim/prediction';
 import { emptyInput, type PlayerView, type SimInput, type SimSnapshot } from '../../shared/sim/types';
@@ -21,6 +22,7 @@ export interface RoomConnectIntent {
   url: string;
   name: string;
   code?: string;
+  roleId?: WorkerRoleId;
 }
 
 export interface RoomClientStatus {
@@ -120,8 +122,11 @@ function snapshotShape(value: unknown): value is SimSnapshot {
     || !record(value.notices) || !record(value.boss) || !numbers(value.boss, ['cooldownSeconds', 'priceMultiplier'])
     || !record(value.metrics) || !Array.isArray(value.players) || value.players.length !== 4
     || !Array.isArray(value.fish) || !Array.isArray(value.crates)) return false;
+  if (value.result !== null && (!record(value.result) || !Array.isArray(value.result.ranking)
+    || !value.result.ranking.every((entry) => record(entry) && isWorkerRoleId(entry.roleId)))) return false;
   return value.players.every((player: unknown) =>
     pose(player) && typeof player.id === 'string' && typeof player.name === 'string' && typeof player.bot === 'boolean'
+    && isWorkerRoleId(player.roleId) && isWorkerAnimation(player.animation)
     && numbers(player, ['yaw', 'speed', 'ragdoll', 'cash', 'sold', 'shiftCash', 'shiftSold', 'favor'])
     && vector(player.velocity) && record(player.metrics) && Array.isArray(player.parts) && player.parts.every(pose)
     && record(player.hook) && numbers(player.hook, ['charge', 'progress'])
@@ -356,9 +361,10 @@ export function createRoomClient(options: ClientOptions) {
     const name = [...intent.name.trim()].slice(0, ROOM_MAX_NAME).join('');
     returnLocal();
     update({ mode: 'connecting', code: code || null });
+    const { roleId } = intent;
     open(url, code
-      ? { type: 'join', code, name }
-      : { type: 'create', name, seed: options.seed, day: options.day, shiftSeconds: options.shiftSeconds });
+      ? { type: 'join', code, name, roleId }
+      : { type: 'create', name, roleId, seed: options.seed, day: options.day, shiftSeconds: options.shiftSeconds });
   }
 
   function restore() {

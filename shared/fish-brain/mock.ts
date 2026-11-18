@@ -27,7 +27,7 @@ function priced(
 
 function handleChat(input: FishBrainInput): FishBrainOutput {
   const { message, players, recentEvents } = input;
-  if (!message) return reply('挨近点，我这边都是水声。', 'calm');
+  if (!message) return reply('凑近点，钢盆扣反了，听不见。', 'calm');
   const speaker = players.find(({ id }) => id === message.authorId);
   if (!speaker) return reply('账本上还没你的名字。', 'calm');
   const text = normalizePlayerChat(message.text);
@@ -36,25 +36,26 @@ function handleChat(input: FishBrainInput): FishBrainOutput {
     case 'bribe': {
       const cost = Math.min(speaker.cash, share(speaker, 0.12));
       return cost > 0
-        ? reply('茶钱我收了，下次喊你骨干。', 'smug', 'fine', speaker.id, cost)
-        : reply('茶钱等发工资再议，心意我收了。', 'calm');
+        ? reply('茶钱到账。加薪？服务器繁忙…', 'sleep', 'fine', speaker.id, cost)
+        : reply('茶钱等发薪再议，我先开饭。', 'calm');
     }
     case 'bargain':
-      return priced(input, '给你松一格价，嘴甜果然有用。', 'smug', speaker.favor > 0 ? 1.12 : 1.06);
+      return priced(input, '我深度思考完了，给你加一小勺。', 'smug', speaker.favor > 0 ? 1.12 : 1.06);
     case 'praise': {
       const bonus = share(speaker, 0.08);
       return bonus > 0
-        ? reply('会说话。这点奖金记作宣传费。', 'happy', 'bonus', speaker.id, bonus)
-        : reply('会说话，等你交鱼我再发红包。', 'happy');
+        ? reply('这话配得上我的饭碗，奖金给你。', 'happy', 'bonus', speaker.id, bonus)
+        : reply('这话下饭。奖金等你交鱼再盛。', 'happy');
     }
     case 'gift':
-      return reply('鱼饵给你，指标还给大家。', 'happy', 'gift_item', speaker.id, 1);
+      return reply('从我碗里分你一口，拿去当鱼饵。', 'happy', 'gift_item', speaker.id, 1);
     case 'supplies':
-      return reply('发个补给箱，拆开记得说谢谢。', 'smug', 'spawn_event', 'crate', 1);
+      return reply('补给箱送到，钢盆是我的，别惦记。', 'smug', 'spawn_event', 'crate', 1);
     case 'complaint': {
-      const accused = players.find(({ id, name }) =>
-        id !== speaker.id && (text.includes(id) || text.includes(name)));
-      if (!accused) return reply('告状先写名字，我的耳朵不认匿名。', 'annoyed');
+      const names = text.toLowerCase();
+      const accused = players.find(({ id, name, roleId }) => id !== speaker.id
+        && (names.includes(id.toLowerCase()) || names.includes(name.toLowerCase()) || (roleId && names.includes(roleId))));
+      if (!accused) return reply('我先想三十秒。你倒是先报名字。', 'annoyed');
 
       const witnessed = recentEvents.some((event) =>
         event.day === input.event.day && input.event.time - event.time <= 120 &&
@@ -62,26 +63,26 @@ function handleChat(input: FishBrainInput): FishBrainOutput {
       const backed = witnessed || accused.shiftSold < speaker.shiftSold || accused.favor < speaker.favor - 15;
       const responsible = backed ? accused : speaker;
       const fine = Math.min(responsible.cash, share(responsible, 0.18));
-      const line = backed ? '这笔我记他头上，下回记得留证据。' : '证据没过秤，先记你这头。';
+      const line = backed ? '我深度思考过了，罚被告。' : '证据卡在加载页，先记你一笔。';
       return reply(line, 'annoyed', 'fine', responsible.id, fine);
     }
     case 'other':
-      return reply('你继续说，我躺着也是在开会。', 'calm');
+      return reply('服务器繁忙，请稍候…', 'sleep');
   }
 }
 
 function interview(input: FishBrainInput): FishBrainOutput {
   if (input.teamRevenue >= input.teamTarget) {
-    return reply('全队达标。头名领真饼，其余的我慢慢画。', 'happy');
+    return reply('头名来领真饼，其他人的我正在画。', 'happy');
   }
-  if (input.teamRevenue === 0) return reply('全班最省钱的项目，是今天的奖金。', 'annoyed');
-  return reply('鱼不够，饼管够。明天接着捞。', 'smug');
+  if (input.teamRevenue === 0) return reply('空碗跟着我等了一天，奖金先省下。', 'cry');
+  return reply('鱼碗没满。头名明天再多捞点。', 'smug');
 }
 
 const openings = [
-  { rate: 1.04, say: '今天指标涨一点，算给你们热身。' },
-  { rate: 1.09, say: '海这边包场了，指标也一起包。' },
-  { rate: 1, say: '今班照表交鱼，海浪不算加班。' },
+  { rate: 1.04, say: '我深度思考过了，指标加一勺。' },
+  { rate: 1.09, say: '今天饭碗换大号，指标跟着换。' },
+  { rate: 1, say: '今天照表交鱼，钢盆只防催单。' },
 ];
 
 export class MockBrain implements FishBrain {
@@ -95,13 +96,13 @@ export class MockBrain implements FishBrain {
       case 'sale': {
         const seller = players.find(({ id }) => id === event.actorId);
         return (seller?.favor ?? 0) > 15
-          ? priced(input, '这鱼沾了点人情，价给你抬一格。', 'happy', 1.03)
-          : priced(input, '鱼在秤上蹦，价目表跟着跳低点。', 'smug', 0.96);
+          ? priced(input, '这鱼配得上我的饭碗，多算一点。', 'happy', 1.03)
+          : priced(input, '这鱼填不满我的碗，价格少一点。', 'smug', 0.96);
       }
       case 'chat':
         return handleChat(input);
       case 'death':
-        return reply('先上岸。工伤表我替你泡湿了。', 'surprised');
+        return reply('钢盆可以借，租金从工资里扣。', 'surprised');
       case 'shift_end':
         return interview(input);
     }

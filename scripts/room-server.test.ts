@@ -61,22 +61,29 @@ test('room authority seats players, serves one shared DeepSeek decision, and res
 
   try {
     const host = await open();
-    host.send({ type: 'create', name: '阿浪', seed: 'authority-fixture', day: 3 });
+    host.send({ type: 'create', name: '阿浪', roleId: 'grok', seed: 'authority-fixture', day: 3 });
     const created = await find(host, isWelcome);
     assert.match(created.code, /^\d{4}$/);
     assert.equal(created.brain, 'deepseek');
     assert.equal(created.role, 'player');
-    await find(host, (message): message is RoomSnapshotMessage =>
+    const opening = await find(host, (message): message is RoomSnapshotMessage =>
       message.type === 'snapshot' && message.state.boss.line?.say === '今天的账，已经记好了。');
+    assert.equal(opening.state.player.roleId, 'grok');
+    assert.deepEqual(new Set(opening.state.players.map(({ roleId }) => roleId)), new Set(['claude', 'gpt', 'grok', 'kimi']));
     assert.equal(modelCalls, 1);
 
     const guest = await open();
-    guest.send({ type: 'join', code: created.code, name: '黑豆' });
+    guest.send({ type: 'join', code: created.code, name: '黑豆', roleId: 'grok' });
+    await find(guest, (message): message is Extract<RoomServerMessage, { type: 'error' }> =>
+      message.type === 'error' && message.code === 'character_taken');
+    guest.send({ type: 'join', code: created.code, name: '黑豆', roleId: 'kimi' });
     const joined = await find(guest, isWelcome);
     assert.notEqual(joined.playerId, created.playerId);
     const initial = await find(guest, (message): message is RoomSnapshotMessage =>
       message.type === 'snapshot' && message.state.players.filter(({ bot }) => !bot).length === 2);
     const guestStart = initial.state.players.find(({ id }) => id === joined.playerId)!;
+    assert.equal(guestStart.roleId, 'kimi');
+    assert.equal(guestStart.name, '黑豆');
     guest.send({ type: 'input', seq: 1, input: { ...emptyInput, moveZ: 1 } });
     const moved = await find(guest, (message): message is RoomSnapshotMessage =>
       message.type === 'snapshot' && message.ack === 1 &&
@@ -92,7 +99,7 @@ test('room authority seats players, serves one shared DeepSeek decision, and res
     await once(guest.socket, 'close');
     await find(host, (message): message is RoomSnapshotMessage =>
       message.type === 'snapshot' && message.serverTick > moved.serverTick &&
-      message.state.players.find(({ id }) => id === joined.playerId)?.bot === true);
+      message.state.players.some(({ id, bot, roleId, name }) => id === joined.playerId && bot && roleId === 'kimi' && name === 'Kimi'));
 
     const observer = await open();
     observer.send({ type: 'resume', code: joined.code, token: joined.token });

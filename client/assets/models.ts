@@ -3,6 +3,7 @@ import type { FishEmotion } from '../../shared/fish-brain/types';
 import { FISH } from '../../shared/sim/config';
 import type { FishKind, RagdollLimb } from '../../shared/sim/types';
 import { crewColor } from '../crew-colors';
+import { makeActor, type ActorAssets } from './actors';
 import { label, palette as p, type GeometryKit } from './geometry';
 
 const fishColors = {
@@ -171,6 +172,7 @@ export function createModels(kit: GeometryKit) {
     for (const [name, member] of standing) member.position.set(...offsets[name]);
     for (const member of ragdoll.values()) member.visible = false;
     const hats = [optimizationHat(standing.get('head')!), optimizationHat(ragdoll.get('head')!)];
+    const loadedHat = optimizationHat(kit.group(yaw, 0, 0.67, 0));
 
     const rod = kit.group(body, 0.40, -0.02, -0.34);
     kit.beam(rod, 0x854d32, new T.Vector3(0, -0.13, 0.20), new T.Vector3(0.12, 0.54, -0.74), 0.033);
@@ -183,7 +185,7 @@ export function createModels(kit: GeometryKit) {
     kit.orb(paddle, p.mustard, 0, 0.60, 0, 0.162, 0.282, 0.049);
     kit.box(paddle, p.rust, 0, 0.73, 0, 0.196, 0.062, 0.087);
     paddle.visible = false;
-    return { yaw, body, standing, ragdoll, rod, tip, paddle, hats };
+    return { yaw, body, standing, ragdoll, rod, tip, paddle, hats, loadedHat };
   }
 
   return { fish, crate, worker };
@@ -228,6 +230,8 @@ export function makeBoss(parent: T.Object3D, kit: GeometryKit) {
     annoyed:   { eyes: [0.71, 0.71], brows: [-0.13, -0.13], browTilt: 0.58, mouth: [0.91, 0.68, -0.07] },
     smug:      { eyes: [0.46, 0.91], brows: [0.04, 0.15], browTilt: -0.27, mouth: [1.04, 0.76, -0.17] },
     surprised: { eyes: [1.26, 1.26], brows: [0.24, 0.24], browTilt: -0.07, mouth: [0.68, 1.48, 0] },
+    cry:       { eyes: [0.74, 0.74], brows: [0.06, 0.06], browTilt: -0.53, mouth: [0.94, 0.76, 0.07] },
+    sleep:     { eyes: [0.08, 0.08], brows: [0.01, 0.01], browTilt: -0.13, mouth: [0.42, 0.38, 0] },
   } as const satisfies Record<FishEmotion, {
     eyes: readonly [number, number];
     brows: readonly [number, number];
@@ -250,4 +254,42 @@ export function makeBoss(parent: T.Object3D, kit: GeometryKit) {
   }
 
   return { fish, speechAnchor, express };
+}
+
+export function makeFeiyu(parent: T.Object3D, kit: GeometryKit, assets: ActorAssets) {
+  const bowl = kit.group(parent, 0.7, -0.38, -18);
+  bowl.visible = false;
+  const profile = [
+    [0, 0.02], [0.67, 0.02], [0.76, 0.12], [1.21, 0.24], [1.49, 0.51],
+    [1.61, 0.82], [1.59, 0.88], [1.43, 0.88], [1.34, 0.69], [1.0, 0.46], [0, 0.46],
+  ].map(([x, y]) => new T.Vector2(x, y));
+  kit.mesh(bowl, new T.LatheGeometry(profile, 40), 0xf3e2bd, 0, 0, 0);
+  const band = new T.LatheGeometry([new T.Vector2(1.45, 0.47), new T.Vector2(1.54, 0.64)], 40);
+  kit.mesh(bowl, band, 0x276994, 0, 0, 0);
+  const rim = kit.mesh(bowl, new T.TorusGeometry(1.505, 0.075, 7, 40), 0x387da2, 0, 0.853, 0);
+  rim.rotation.x = -Math.PI / 2;
+  kit.tube(bowl, 0xf5cf91, 0, 0.48, 0, 0.95, 0.10);
+  const logo = kit.group(bowl, 0, 0.57, 1.515);
+  logo.rotation.x = -0.16;
+  kit.orb(logo, 0xf7e8c9, 0.03, -0.018, 0.026, 0.28, 0.12, 0.016);
+  kit.orb(logo, 0xf7e8c9, -0.20, 0.051, 0.028, 0.123, 0.071, 0.022).rotation.z = 0.52;
+  kit.orb(logo, 0xf7e8c9, -0.30, 0.10, 0.047, 0.11, 0.047, 0.02).rotation.z = -0.36;
+  kit.orb(logo, 0xf7e8c9, -0.15, 0.108, 0.047, 0.11, 0.047, 0.02).rotation.z = 0.34;
+  kit.orb(logo, 0x276994, 0.168, 0.002, 0.045, 0.023, 0.023, 0.014);
+  const actor = makeActor(bowl, assets, 2.72, -0.075);
+  actor.pivot.position.y = 0.535;
+  actor.use('feiyu');
+  const speechAnchor = kit.group(bowl, 0, 3.40, 0.45);
+
+  return {
+    actor,
+    speechAnchor,
+    animate(seconds: number, delta: number, emotion: FishEmotion, speaking: boolean) {
+      bowl.visible = actor.ready;
+      bowl.position.y = -0.36 + Math.sin(seconds * 1.1) * 0.11;
+      actor.pivot.rotation.z = Math.sin(seconds * 0.72) * 0.031;
+      const clip = speaking && (emotion === 'happy' || emotion === 'smug') ? 'agree' : 'idle';
+      actor.play(clip, delta);
+    },
+  };
 }

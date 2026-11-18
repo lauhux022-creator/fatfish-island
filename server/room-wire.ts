@@ -1,5 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import { ROOM_CODE_PATTERN, ROOM_MAX_NAME, type RoomClientMessage } from '../shared/net/types';
+import { isWorkerRoleId } from '../shared/sim/cast';
 import { PLAY, SHIFT } from '../shared/sim/config';
 import type { SimInput } from '../shared/sim/types';
 
@@ -58,6 +59,7 @@ export function readRoomMessage(data: string): RoomClientMessage | null {
   switch (value.type) {
     case 'create': {
       if (typeof value.name !== 'string') return null;
+      if (value.roleId !== undefined && !isWorkerRoleId(value.roleId)) return null;
       if (value.seed !== undefined && typeof value.seed !== 'string') return null;
       if (value.day !== undefined && !Number.isSafeInteger(value.day)) return null;
       if (value.shiftSeconds !== undefined && !finite(value.shiftSeconds)) return null;
@@ -65,6 +67,7 @@ export function readRoomMessage(data: string): RoomClientMessage | null {
       return {
         type: 'create',
         name: normalize(value.name, ROOM_MAX_NAME),
+        roleId: value.roleId,
         seed: seed || undefined,
         day: value.day === undefined ? undefined : Math.max(1, Math.min(999, Number(value.day))),
         shiftSeconds: value.shiftSeconds === undefined ? undefined
@@ -73,7 +76,8 @@ export function readRoomMessage(data: string): RoomClientMessage | null {
     }
     case 'join':
       if (typeof value.code !== 'string' || !ROOM_CODE_PATTERN.test(value.code) || typeof value.name !== 'string') return null;
-      return { type: 'join', code: value.code, name: normalize(value.name, ROOM_MAX_NAME) };
+      if (value.roleId !== undefined && !isWorkerRoleId(value.roleId)) return null;
+      return { type: 'join', code: value.code, name: normalize(value.name, ROOM_MAX_NAME), roleId: value.roleId };
     case 'resume':
       if (typeof value.code !== 'string' || !ROOM_CODE_PATTERN.test(value.code)
         || typeof value.token !== 'string' || !TOKEN_PATTERN.test(value.token)) return null;

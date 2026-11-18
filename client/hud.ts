@@ -1,4 +1,6 @@
 import { normalizePlayerChat } from '../shared/fish-brain/chat';
+import { crewReaction } from '../shared/fish-brain/reactions';
+import { bossBust, crewBust, updatePortrait } from './assets/portraits';
 import { ISLAND, PLAY, SHIFT } from '../shared/sim/config';
 import type { FishView, ShiftEntry, SimSnapshot } from '../shared/sim/types';
 import { crewColor } from './crew-colors';
@@ -157,7 +159,8 @@ const markup = `
   </header>
   <p class="notice" data-notice role="status" hidden></p>
   <aside class="boss-bubble" aria-label="大肥鱼" data-boss-bubble role="status" hidden>
-    <span data-boss-say></span>
+    <img data-boss-portrait alt="" hidden>
+    <span><span data-boss-say></span><small data-crew-reaction hidden></small></span>
   </aside>
   <dialog class="standings" id="standings" aria-labelledby="standings-title" data-standings hidden>
     <div class="standings-head">
@@ -175,7 +178,16 @@ const markup = `
         <span class="settlement-status" data-settlement-status></span>
       </div>
       <p class="standings-note" data-standings-note></p>
-      <p class="shift-interview" data-shift-interview role="status" hidden><b>大肥鱼</b><span data-shift-interview-say></span><small data-shift-interview-effect hidden></small></p>
+      <section class="shift-interview" data-shift-interview role="status" hidden>
+        <div class="interview-speaker">
+          <img data-interview-boss alt="" hidden>
+          <div><b>大肥鱼</b><span data-shift-interview-say></span><small data-shift-interview-effect hidden></small></div>
+        </div>
+        <div class="interview-workers">
+          <figure><img data-interview-winner alt="" hidden><figcaption data-interview-winner-name></figcaption></figure>
+          <figure><img data-interview-last alt="" hidden><figcaption data-interview-last-name></figcaption></figure>
+        </div>
+      </section>
       <button type="button" class="shift-continue" data-control="continue">开始下一班 <kbd>Enter</kbd></button>
     </div>
   </dialog>
@@ -271,6 +283,8 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   const ui = <T extends Element>(selector: string): T => root.querySelector<T>(selector)!;
   const canvas = ui<HTMLCanvasElement>('.world');
   const bossBubble = ui<HTMLElement>('[data-boss-bubble]');
+  const bossPortrait = ui<HTMLImageElement>('[data-boss-portrait]');
+  const reactionText = ui<HTMLElement>('[data-crew-reaction]');
   const bossSay = ui('[data-boss-say]');
   const bossToggle = ui<HTMLButtonElement>('[data-boss-chat-toggle]');
   const bossForm = ui<HTMLFormElement>('[data-boss-form]');
@@ -280,6 +294,14 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   const bossMemory = ui<HTMLElement>('[data-boss-memory]');
   const bossEffect = ui<HTMLElement>('[data-boss-effect]');
   const interview = ui<HTMLElement>('[data-shift-interview]');
+  const interviewBoss = ui<HTMLImageElement>('[data-interview-boss]');
+  const interviewWinner = ui<HTMLImageElement>('[data-interview-winner]');
+  const interviewLast = ui<HTMLImageElement>('[data-interview-last]');
+  const winnerName = ui('[data-interview-winner-name]');
+  const lastName = ui('[data-interview-last-name]');
+  for (const portrait of [bossPortrait, interviewBoss, interviewWinner, interviewLast]) {
+    portrait.addEventListener('error', () => { portrait.hidden = true; });
+  }
   const interviewSay = ui('[data-shift-interview-say]');
   const interviewEffect = ui<HTMLElement>('[data-shift-interview-effect]');
   const task = ui<HTMLElement>('.task');
@@ -372,6 +394,11 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
         action: line.action,
       });
       writeText(bossSay, line.say);
+      updatePortrait(bossPortrait, bossBust(line.emotion));
+      const speaker = snapshot.players.find(({ id }) => line.target === id);
+      const reaction = speaker && crewReaction(speaker.roleId, line.action);
+      reactionText.hidden = !reaction;
+      if (reaction) writeText(reactionText, `${speaker.name}：${reaction}`);
     }
     bossBubble.hidden = !line || shiftPaused || performance.now() >= speakUntil;
     if (shiftPaused && !bossForm.hidden) setChatOpen(false);
@@ -380,6 +407,13 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
     interview.hidden = !meeting && !meetingPending;
     if (!interview.hidden) {
       interview.dataset.emotion = meeting?.emotion ?? 'calm';
+      updatePortrait(interviewBoss, bossBust(meeting?.emotion ?? 'calm'));
+      const winner = snapshot.result?.ranking[0];
+      const last = snapshot.result?.ranking.at(-1);
+      updatePortrait(interviewWinner, winner ? crewBust(winner.roleId, 'smug') : undefined);
+      updatePortrait(interviewLast, last ? crewBust(last.roleId, 'cry') : undefined);
+      writeText(winnerName, winner ? `榜首 · ${winner.name}` : '');
+      writeText(lastName, last ? `末位 · ${last.name}` : '');
       writeText(interviewSay, meeting?.say ?? '正在对账…');
       interviewEffect.hidden = !meeting?.effect;
       if (meeting?.effect) writeText(interviewEffect, meeting.effect);
@@ -450,7 +484,7 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
     const { result, players, player, shiftPaused, teamRevenue, teamTarget } = snapshot;
     const settled = shiftPaused ? result : null;
     const spectator = root.dataset.roomMode === 'spectating' || root.dataset.roomMode === 'reconnecting';
-    const modal = shiftPaused && !spectator && !root.querySelector('[data-room-dialog][open]');
+    const modal = shiftPaused && !spectator && !root.querySelector('[data-room-dialog][open], [data-local-role-dialog][open]');
     if (shiftPaused && !spectator) boardPinned = false;
     const visible = (shiftPaused && !spectator) || boardPinned;
     continueButton.hidden = spectator;
@@ -463,8 +497,8 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
 
     const ranking = settled?.ranking ?? [...players]
       .sort((a, b) => b.shiftCash - a.shiftCash || b.shiftSold - a.shiftSold)
-      .map(({ id, name, bot, shiftCash, shiftSold }, index) => ({
-        id, name, bot, rank: index + 1, revenue: shiftCash, sold: shiftSold, bonus: 0, fine: 0, optimization: false,
+      .map(({ id, roleId, name, bot, shiftCash, shiftSold }, index) => ({
+        id, roleId, name, bot, rank: index + 1, revenue: shiftCash, sold: shiftSold, bonus: 0, fine: 0, optimization: false,
       }));
     const displayDay = settled?.day ?? snapshot.day;
     const key = JSON.stringify([displayDay, Boolean(settled), teamRevenue, teamTarget, ranking]);

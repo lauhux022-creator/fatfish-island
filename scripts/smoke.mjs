@@ -69,7 +69,9 @@ async function openShift(shiftSeconds) {
   assert.equal(state.day, 3);
   assert.equal(state.sold, 0);
   assert.equal(await page.locator('[data-debug]').isVisible(), true);
-  assert.deepEqual(state.players.filter((worker) => worker.bot).map(({ name }) => name).sort(), ['阿铲', '桶桶', '溜溜'].sort());
+  assert.deepEqual(state.players.map(({ roleId, name }) => [roleId, name]), [
+    ['gpt', 'GPT'], ['claude', 'Claude'], ['kimi', 'Kimi'], ['grok', 'Grok'],
+  ]);
 }
 
 async function aimAt(position) {

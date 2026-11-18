@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DeepSeekBrain } from '../server/fish-brain';
 import { MockBrain } from '../shared/fish-brain/mock';
+import { crewReaction } from '../shared/fish-brain/reactions';
 import {
   FISH_ACTIONS,
   FISH_EMOTIONS,
@@ -18,8 +19,8 @@ const input: FishBrainInput = {
   event: { trigger: 'chat', day: 3, time: 29, actorId: 'player', summary: '你与大肥鱼谈鱼价' },
   recentEvents: [],
   players: [
-    { id: 'player', name: '你', cash: 200, shiftCash: 120, shiftSold: 3, favor: 0, memory: '' },
-    { id: 'bot-2', name: '桶桶', cash: 180, shiftCash: 100, shiftSold: 2, favor: 4, memory: '' },
+    { id: 'player', name: 'GPT', roleId: 'gpt', cash: 200, shiftCash: 120, shiftSold: 3, favor: 0, memory: '' },
+    { id: 'bot-2', name: '远海班长', roleId: 'kimi', cash: 180, shiftCash: 100, shiftSold: 2, favor: 4, memory: '' },
   ],
   message: { authorId: 'player', text: '收鱼能涨价吗' },
   teamTarget: 1500,
@@ -66,6 +67,26 @@ test('MockBrain generates repeatable short lines for all five triggers', () => {
   }
 });
 
+test('boss reactions recognize crew names and validate the busy and crying portraits', () => {
+  const brain = new MockBrain();
+  const complaint = brain.respond({ ...input, message: { authorId: 'player', text: '老板，KIMI 偷鱼，我来告状' } });
+  assert.equal(complaint.action, 'fine');
+  assert.equal(complaint.target, 'bot-2');
+  assert.equal(complaint.amount, 18);
+
+  const busy = brain.respond({ ...input, message: { authorId: 'player', text: '老板在干嘛' } });
+  assert.equal(busy.emotion, 'sleep');
+  assert.match(busy.say, /服务器繁忙/);
+  assert.deepEqual(validateFishOutput(busy), busy);
+
+  const crying = brain.respond({ ...input, teamRevenue: 0, event: { ...input.event, trigger: 'shift_end' } });
+  assert.equal(crying.emotion, 'cry');
+  assert.deepEqual(validateFishOutput(crying), crying);
+  assert.match(crewReaction('kimi', 'fine') ?? '', /上下文/);
+  assert.match(crewReaction('gpt', 'bonus') ?? '', /第一步/);
+  assert.equal(crewReaction('grok', 'none'), null);
+});
+
 test('server adapter uses chat completions JSON mode and drops unknown model actions', async () => {
   const calls: { model: string; response_format: { type: string }; messages: { role: string; content: string }[] }[] = [];
   const brain = new DeepSeekBrain('fixture-key', 'fixture-model', async (url, options) => {
@@ -79,6 +100,8 @@ test('server adapter uses chat completions JSON mode and drops unknown model act
   assert.deepEqual(await brain.respond(input), valid);
   assert.equal(calls[0].model, 'fixture-model');
   assert.equal(calls[0].response_format.type, 'json_object');
+  assert.match(calls[0].messages[0].content, /鲸鱼女仆/);
+  assert.match(calls[0].messages[0].content, /服务器繁忙/);
   assert.equal(JSON.parse(calls[0].messages[1].content).message.text, '收鱼能涨价吗');
   assert.equal((await brain.respond(input)).action, 'none');
 });

@@ -1,9 +1,11 @@
+import { DEFAULT_WORKER_ROLE, isWorkerRoleId } from '../shared/sim/cast';
 import { STEP_SECONDS } from '../shared/sim/config';
 import { emptyInput, type SimInput, type SimSnapshot, type Vec3 } from '../shared/sim/types';
 import { createHud } from './hud';
 import { createSound } from './sound';
 import { createRoomClient, type RoomDebugState } from './net/room-client';
 import { createRoomLobby } from './room-lobby';
+import { createRolePicker } from './role-picker';
 import './style.css';
 
 declare const __GAME_VERSION__: string;
@@ -25,6 +27,8 @@ const seed = params.get('seed')?.trim().slice(0, 80) || crypto.getRandomValues(n
 const dayParam = Number.parseInt(params.get('day') ?? '1', 10);
 const day = Number.isFinite(dayParam) ? Math.min(999, Math.max(1, dayParam)) : 1;
 const debug = params.get('debug') === '1';
+const selectedRole = params.get('role');
+const roleId = isWorkerRoleId(selectedRole) ? selectedRole : DEFAULT_WORKER_ROLE;
 const shiftSeconds = debug && params.has('shiftSeconds') ? Number(params.get('shiftSeconds')) : undefined;
 
 const app = document.querySelector<HTMLElement>('#app')!;
@@ -39,7 +43,7 @@ async function startGame() {
     import('./scene'),
   ]);
   const scene = createScene(hud.canvas);
-  const sim = await createSimulation({ seed, day, shiftSeconds });
+  const sim = await createSimulation({ seed, day, shiftSeconds, roleId });
   const sound = createSound();
   const events = new AbortController();
   const options = { signal: events.signal };
@@ -53,6 +57,7 @@ async function startGame() {
   let lastUiSnapshot: SimSnapshot | undefined;
   let lastMode: RoomDebugState['mode'] = 'local';
   let lobby: ReturnType<typeof createRoomLobby> | undefined;
+  let picker: ReturnType<typeof createRolePicker> | undefined;
   const room = createRoomClient({
     seed,
     day: debug ? day : undefined,
@@ -70,14 +75,16 @@ async function startGame() {
         lastMode = status.mode;
       }
       lobby?.update(status);
+      picker?.setVisible(status.mode === 'local');
     },
   });
 
-  lobby = createRoomLobby(app, { connect: room.connect, leave: room.leave });
+  lobby = createRoomLobby(app, { connect: room.connect, leave: room.leave }, roleId);
+  picker = createRolePicker(app, roleId);
   lobby.update(room.status());
 
   function lobbyOpen() {
-    return Boolean(app.querySelector('[data-room-dialog][open]'));
+    return Boolean(app.querySelector('[data-room-dialog][open], [data-local-role-dialog][open]'));
   }
 
   function canPlay() {

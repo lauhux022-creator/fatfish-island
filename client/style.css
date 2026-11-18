@@ -954,3 +954,64 @@ h1 small {
   .room-dialog { padding: 14px; }
   .room-status { font-size: 9px; padding: 2px 5px; }
 }
+
+.role-toggle { white-space: nowrap; }
+.role-dialog p { margin: 12px 0; color: #4b5444; font-size: 12px; }
+.role-choices { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+.role-choices label {
+  position: relative;
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #9a9e7a;
+  border-radius: 5px;
+  background: #f7ebcb;
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+.role-choices label:has(input:checked) { outline: 2px solid #a85c29; background: #ffdf94; }
+.role-choices label:has(input:focus-visible) { outline: 3px solid #315d56; }
+.role-choices input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.role-choices img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 3px; }
+.room-form select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 1px solid #929474;
+  border-radius: 5px;
+  background: #fff9e5;
+  color: var(--ink);
+  font: inherit;
+}
+
+.boss-bubble {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  text-align: left;
+}
+.boss-bubble img, .interview-speaker img {
+  flex: 0 0 52px;
+  width: 52px;
+  height: 54px;
+  object-fit: contain;
+  border-radius: 4px;
+  background: #766f5130;
+}
+.boss-bubble small { display: block; margin-top: 4px; color: #734724; font-size: 10px; }
+.boss-bubble[data-emotion="sleep"] { background: #e2e6df; }
+.boss-bubble[data-emotion="cry"] { background: #dcefe9; }
+.interview-speaker, .interview-workers { display: flex; align-items: center; gap: 8px; }
+.interview-workers { justify-content: center; margin-top: 5px; }
+.interview-workers figure { display: grid; justify-items: center; min-width: 75px; margin: 0 5px; }
+.interview-workers img { height: 50px; width: 59px; object-fit: contain; }
+.interview-workers figcaption { font-size: 10px; font-weight: 800; white-space: nowrap; }
+
+@media (max-width: 600px) {
+  .account-tools { gap: 4px; }
+  .role-toggle { padding-inline: 5px; }
+  .boss-bubble img { flex-basis: 39px; width: 39px; height: 42px; }
+}

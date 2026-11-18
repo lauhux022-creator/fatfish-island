@@ -1,8 +1,10 @@
+import type { WorkerRoleId } from '../sim/cast';
+
 export const FISH_ACTIONS = [
   'none', 'bonus', 'fine', 'set_kpi', 'price_change', 'spawn_event', 'gift_item', 'eat_player',
 ] as const;
 
-export const FISH_EMOTIONS = ['calm', 'happy', 'annoyed', 'smug', 'surprised'] as const;
+export const FISH_EMOTIONS = ['calm', 'happy', 'annoyed', 'smug', 'surprised', 'cry', 'sleep'] as const;
 
 export type FishAction = typeof FISH_ACTIONS[number];
 export type FishEmotion = typeof FISH_EMOTIONS[number];
@@ -30,6 +32,7 @@ export interface FishChat {
 export interface FishPlayerContext {
   id: string;
   name: string;
+  roleId?: WorkerRoleId;
   cash: number;
   shiftCash: number;
   shiftSold: number;
