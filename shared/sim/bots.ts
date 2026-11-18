@@ -1,12 +1,14 @@
 import { BOTS, CAMPAIGN, FISHING, ISLAND, PLAY } from './config';
+import { CARGO } from './cargo';
 import { seededRandom } from './random';
 import { weaponStats } from './shop';
-import { emptyInput, type PlayerView, type SimInput, type SimSnapshot, type Vec3 } from './types';
+import { emptyInput, type FishView, type PlayerView, type SimInput, type SimSnapshot, type Vec3 } from './types';
 
 type Point = Pick<Vec3, 'x' | 'z'>;
 type BotId = keyof typeof BOTS.profiles;
 type Profile = (typeof BOTS.profiles)[BotId];
 type Range = readonly [number, number];
+const volunteerSeconds = 1.15;
 
 interface Pursuit {
   victim: string;
@@ -69,6 +71,52 @@ function nearest<T extends { position: Vec3 }>(
     }
   }
   return selected;
+}
+
+function freeForLift(player: PlayerView) {
+  return player.grounded && !player.ghost && !player.ragdoll && !player.baitedBy && !player.carrying
+    && !player.lifting && player.hook.phase === 'idle';
+}
+
+function withinGrip(player: PlayerView, fish: FishView, leader: PlayerView) {
+  return distance(player.position, fish.position) < CARGO.gripReach
+    && distance(player.position, leader.position) < CARGO.pairReach
+    && Math.abs(player.position.y - fish.position.y) < CARGO.gripHeight;
+}
+
+function liftInput(snapshot: SimSnapshot, player: PlayerView): SimInput | undefined {
+  if (player.carrying) {
+    const cargo = snapshot.fish.find(({ id, helperId }) => id === player.carrying && helperId === player.id);
+    const leader = cargo && snapshot.players.find(({ id }) => id === cargo.carrierId);
+    if (leader) {
+      return { ...emptyInput, ...steer(player.position, leader.position, 1.18), aim: leader.position };
+    }
+  }
+  if (!freeForLift(player)) return;
+
+  const assigned = new Set<string>();
+  for (const fish of snapshot.fish) {
+    const since = fish.liftClaimAt;
+    if (since === null || !fish.liftClaimId) continue;
+    const leader = snapshot.players.find(({ id, bot, lifting }) => id === fish.liftClaimId && !bot && lifting === fish.id);
+    if (!leader) continue;
+    const helper = nearest(snapshot.players, fish.position, (candidate) =>
+      candidate.bot && freeForLift(candidate) && !assigned.has(candidate.id), Infinity);
+    if (!helper) continue;
+    if (helper.id !== player.id) {
+      assigned.add(helper.id);
+      continue;
+    }
+    const spot = {
+      x: fish.position.x * 0.7 + leader.position.x * 0.3,
+      z: fish.position.z * 0.7 + leader.position.z * 0.3,
+    };
+    const waitForVolunteer = snapshot.time - since < volunteerSeconds
+      && snapshot.players.some((candidate) => !candidate.bot && freeForLift(candidate) && withinGrip(candidate, fish, leader));
+    const canLift = !waitForVolunteer && withinGrip(player, fish, leader)
+      && distance(player.position, leader.position) < CARGO.pairReach - 0.65;
+    return { ...emptyInput, ...steer(player.position, spot, 0.62), aim: fish.position, interactPressed: canLift };
+  }
 }
 
 function fishingInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, castAim: Point): SimInput | undefined {
@@ -153,7 +201,7 @@ function mischiefInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, 
   const origin = player.position;
   if (steal) {
     const fish = nearest(snapshot.fish, origin, (item) =>
-      item.baitPlayerId !== player.id && Math.abs(item.position.y - origin.y) < 1.42 &&
+      !item.heavy && item.baitPlayerId !== player.id && Math.abs(item.position.y - origin.y) < 1.42 &&
       ((item.state === 'carried' && item.carrierId === victim && item.stealReady)
         || (item.state === 'thrown' && item.lastTouch === victim)),
     PLAY.reach - 0.14);
@@ -214,7 +262,7 @@ function workInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, prof
   }
 
   const catchOfTheDay = nearest(snapshot.fish, origin, (fish) => fish.caughtBy === player.id
-    && (fish.state === 'stunned' || fish.state === 'flopping'), 9);
+    && ((fish.state === 'stunned' && !fish.heavy) || fish.state === 'flopping'), 9);
   if (catchOfTheDay) {
     endPursuit(brain, player, claims, snapshot.time, false);
     const aim = catchOfTheDay.position;
@@ -331,6 +379,11 @@ export function createBotController(seed: string) {
         brains.set(id, brain);
       }
       if (player.ghost) return ghostInput(snapshot, player, brain);
+      const lift = liftInput(snapshot, player);
+      if (lift) {
+        endPursuit(brain, player, claims, snapshot.time, false);
+        return lift;
+      }
       if (snapshot.campaign.phase === 'night' || snapshot.campaign.phase === 'boss') {
         endPursuit(brain, player, claims, snapshot.time, false);
         return defenseInput(snapshot, player, brain, profile, id);

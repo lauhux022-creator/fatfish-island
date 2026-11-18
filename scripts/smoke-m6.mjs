@@ -42,7 +42,9 @@ async function boot(seed, { day = 1, virtual = true } = {}) {
   if (process.env.EXPECTED_COMMIT) {
     assert.equal(await page.locator('[data-commit]').textContent(), process.env.EXPECTED_COMMIT);
   }
-  assert.equal(await page.locator('[data-version]').textContent(), '0.6.0');
+  const version = await page.locator('[data-version]').textContent();
+  assert.match(version ?? '', /^\d+\.\d+\.\d+$/);
+  if (process.env.EXPECTED_VERSION) assert.equal(version, process.env.EXPECTED_VERSION);
   assert((await state(page)).tick > 2);
   return { page, context, readySeconds: Number(((performance.now() - slowBoot) / 1000).toFixed(2)) };
 }

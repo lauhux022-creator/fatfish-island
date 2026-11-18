@@ -1,5 +1,6 @@
 import * as T from 'three';
 import type { FishEmotion } from '../../shared/fish-brain/types';
+import { CARGO } from '../../shared/sim/cargo';
 import { FISH } from '../../shared/sim/config';
 import type { FishKind, RagdollLimb } from '../../shared/sim/types';
 import { crewColor } from '../crew-colors';
@@ -42,10 +43,11 @@ export function createModels(kit: GeometryKit) {
   const warningDecal = new T.Group();
   label(warningDecal, '待优化', 0.57, 0.225, 0, 0, 0);
 
-  function fish(parent: T.Object3D, kind: FishKind) {
+  function fish(parent: T.Object3D, kind: FishKind, heavy = false) {
     const { back, belly, fin } = fishColors[kind];
     const animal = kit.group(parent);
-    animal.scale.setScalar(FISH[kind].size);
+    const size = FISH[kind].size * (heavy ? CARGO.heavyScale : 1);
+    animal.scale.set(size * (heavy ? 1.13 : 1), size, size * (heavy ? 1.12 : 1));
     const blimp = kind === 'puffer';
     kit.orb(animal, back, 0, 0.04, 0, blimp ? 0.34 : 0.46, blimp ? 0.29 : 0.21, 0.205);
     kit.orb(animal, belly, 0.07, -0.075, 0, blimp ? 0.29 : 0.39, 0.14, 0.194);
@@ -61,6 +63,13 @@ export function createModels(kit: GeometryKit) {
       kit.orb(animal, 0xfff7cf, eyeX + 0.029, 0.081, side * 0.227, 0.015, 0.014, 0.008);
       const flipper = kit.mesh(animal, sideFin, fin, 0.025, -0.075, side * 0.179);
       flipper.rotation.y = side * 0.6;
+      if (heavy) {
+        for (let mark = 0; mark < 3; mark++) {
+          const band = kit.orb(animal, p.rust, -0.19 + mark * 0.126, 0.09 - mark * 0.025, side * 0.182,
+            0.046, 0.091, 0.022);
+          band.rotation.z = -0.42;
+        }
+      }
       if (blimp) {
         for (let spot = 0; spot < 4; spot++) {
           kit.orb(animal, 0xa96c3f, -0.12 + spot * 0.066, 0.163 + (spot % 2) * 0.050, side * (0.135 - (spot % 2) * 0.048), 0.026, 0.026, 0.018, true);

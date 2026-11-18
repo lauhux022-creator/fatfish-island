@@ -109,8 +109,30 @@ function guideFor(snapshot: SimSnapshot): Guide {
     return { title: '你被队友钩住了！', desktop: '', touch: '' };
   }
 
+  const waiting = fish.find(item => item.heavy && item.id === player.lifting);
+  if (waiting) {
+    return {
+      title: '抓住了一边，等人搭手',
+      desktop: '让队友到空着的圆圈按 E。再按 E 可以松手。',
+      touch: '队友点「搬／扔」帮抬。你再点一次可松手。',
+    };
+  }
+
   const heldFish = fish.find((item) => item.id === player.carrying);
   if (heldFish) {
+    if (heldFish.heavy) {
+      const nearScale = Math.hypot(heldFish.position.x - ISLAND.scale.x, heldFish.position.z - ISLAND.scale.z)
+        < ISLAND.scale.aimAssistDistance;
+      return nearScale ? {
+        title: '到秤前了，一起上秤',
+        desktop: '朝橙色秤盘按 E，合力抛上去。',
+        touch: '点橙色秤盘瞄准，再按「搬／扔」。',
+      } : {
+        title: '两人抓牢了，抬去橙秤',
+        desktop: 'WASD 和队友一起靠近秤盘，到了再按 E。',
+        touch: '和队友一起走向橙色秤盘，到了再按「搬／扔」。',
+      };
+    }
     return {
       title: heldFish.baitMultiplier > 1 ? `活饵溢价 ×${heldFish.baitMultiplier}，快上秤` : '把鱼扔进橙色秤盘',
       desktop: '走到秤前，朝秤盘按 E 抛鱼。',
@@ -132,6 +154,14 @@ function guideFor(snapshot: SimSnapshot): Guide {
   const distanceTo = (item: FishView) =>
     Math.hypot(item.position.x - player.position.x, item.position.z - player.position.z);
   const nearby = (item: FishView) => distanceTo(item) < 4.5 && item.position.z >= ISLAND.shoreZ - 0.6;
+  const nearbyCargo = fish.find(item => item.heavy && (item.state === 'stunned' || item.state === 'thrown') && nearby(item));
+  if (nearbyCargo) {
+    return {
+      title: nearbyCargo.liftClaimId ? '队友在等你搭把手' : '巨型活饵鱼 · 要两个人抬',
+      desktop: '走到大鱼旁的空圈，按 E 抓住一边。',
+      touch: '走到大鱼旁的空圈，点「搬／扔」抓住一边。',
+    };
+  }
   if (fish.some((item) => item.caughtBy === player.id && item.state === 'flopping' && nearby(item))) return stunFish;
   const unfinishedCatch = fish.some((item) => item.caughtBy === player.id && item.state === 'stunned' && nearby(item));
   if (!unfinishedCatch && sold > 0 && !SHOP_ITEM_IDS.some((id) => player.equipment?.[id])) {
@@ -315,6 +345,7 @@ const markup = `
           <li><b>钓鱼</b> 移动鼠标瞄准。左键长按抛竿，咬钩后连点左键收线。</li>
           <li><b>拍晕</b> WASD 追上鱼，瞄准后按 F 或右键挥桨，空格跳起还能接一桨。</li>
           <li><b>交鱼</b> 靠近晕鱼按 E 抬起，朝橙色秤盘按 E 扔进去。</li>
+          <li><b>大鱼</b> 巨型活饵鱼得两人各按一次 E 抓住两端，抬到秤前再扔。</li>
           <li><b>截胡</b> 靠近别人手里的鱼或半空中的鱼，朝鱼按 E 抢。</li>
           <li><b>队友饵</b> 朝队友甩钩，再瞄准海面点左键。活饵渔获售价更高，饵员拿不到绩效。</li>
         </ol>
@@ -322,6 +353,7 @@ const markup = `
           <li><b>钓鱼</b> 点海面瞄准。长按抛竿，咬钩后连点收线。</li>
           <li><b>拍晕</b> 用方向键追上鱼，点鱼瞄准，按「挥桨」。</li>
           <li><b>交鱼</b> 靠近晕鱼按「搬／扔」，朝橙色秤盘再按一下。</li>
+          <li><b>大鱼</b> 两人分别点「搬／扔」抓住巨型活饵鱼，抬到秤前再扔。</li>
           <li><b>截胡</b> 靠近并瞄准别人手里或半空中的鱼，点「搬／扔」抢。</li>
           <li><b>队友饵</b> 点队友瞄准并甩钩，再点海面按「投／收」。活饵渔获售价更高，饵员拿不到绩效。</li>
         </ol>
@@ -407,6 +439,8 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   const touch = ui<HTMLParagraphElement>('[data-touch]');
   const meter = ui<HTMLProgressElement>('[data-task-meter]');
   const notice = ui<HTMLParagraphElement>('[data-notice]');
+  const headerColumns = [...root.querySelectorAll<HTMLElement>('.hud-head > *')];
+  const bossObstacles = [...headerColumns, notice];
   const error = ui<HTMLParagraphElement>('[data-error]');
   const debug = ui<HTMLElement>('[data-debug]');
   const debugText = ui('[data-debug-text]');
@@ -578,10 +612,24 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
 
   function setBossAnchor(point: { x: number; y: number }) {
     const width = bossBubble.offsetWidth;
+    const height = bossBubble.offsetHeight;
     const gutter = width / 2 + 8;
     const x = Math.max(gutter, Math.min(root.clientWidth - gutter, point.x));
-    const y = Math.max(bossBubble.offsetHeight + 12, point.y);
+    let y = Math.max(height + 12, point.y);
+    let docked = false;
+    if (root.clientWidth <= 600) {
+      const left = x - width / 2;
+      const right = x + width / 2;
+      for (const area of bossObstacles) {
+        if (area.hidden) continue;
+        const rect = area.getBoundingClientRect();
+        if (left >= rect.right + 6 || right <= rect.left - 6 || y <= rect.top - 6 || y - height >= rect.bottom + 8) continue;
+        y = rect.bottom + height + 8;
+        docked = true;
+      }
+    }
     const tail = Math.max(14, Math.min(width - 14, point.x - x + width / 2));
+    if (bossBubble.dataset.docked !== String(docked)) bossBubble.dataset.docked = String(docked);
     bossBubble.style.setProperty('--boss-x', `${Math.round(x)}px`);
     bossBubble.style.setProperty('--boss-y', `${Math.round(y)}px`);
     bossBubble.style.setProperty('--boss-tail', `${Math.round(tail)}px`);
@@ -793,6 +841,11 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
       notice.dataset.tone = event.tone;
     }
     notice.hidden = !event || time >= noticeUntil;
+    if (!notice.hidden && root.clientWidth <= 600) {
+      const headerBottom = Math.max(...headerColumns.map(area => area.getBoundingClientRect().bottom));
+      const top = `${Math.ceil(headerBottom + 8)}px`;
+      if (notice.style.getPropertyValue('--hud-notice-top') !== top) notice.style.setProperty('--hud-notice-top', top);
+    }
 
     if (!meta.debug) return;
     Object.assign(debug.dataset, {

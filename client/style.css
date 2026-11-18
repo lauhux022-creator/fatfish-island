@@ -717,6 +717,14 @@ h1 small {
   background: inherit;
   transform: translateX(-50%) rotate(45deg);
 }
+.boss-bubble[data-docked="true"]::after {
+  top: -6px;
+  bottom: auto;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: inherit;
+  border-top: inherit;
+}
 .boss-bubble[data-emotion="happy"] { background: #ffedb5; }
 .boss-bubble[data-emotion="annoyed"] { background: #fce0c9; }
 .boss-bubble[data-emotion="smug"] { background: #f3eccb; }
@@ -1108,6 +1116,7 @@ h1 small {
 .game[data-campaign-phase="cleared"] .boss-chat-toggle { display: none; }
 
 @media (max-width: 600px) {
+  .notice { top: var(--hud-notice-top, calc(max(var(--edge), env(safe-area-inset-top)) + 152px)); }
   .campaign-ledger { min-width: 0; padding: 3px 6px; font-size: 9px; }
   .campaign-controls {
     right: 50%;

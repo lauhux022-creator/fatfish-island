@@ -101,6 +101,8 @@ export interface PlayerView extends Pose {
   ragdoll: number;
   parts: RagdollPart[];
   carrying: string | null;
+  /** Heavy fish awaiting a second grip. The first worker is not carrying it yet. */
+  lifting: string | null;
 }
 
 export type HookPhase = 'idle' | 'charging' | 'flying' | 'waiting' | 'bite' | 'reeling' | 'bait';
@@ -120,6 +122,7 @@ export type FishState = 'swimming' | 'hooked' | 'flopping' | 'escaping' | 'stunn
 export interface FishView extends Pose {
   id: string;
   kind: FishKind;
+  heavy: boolean;
   state: FishState;
   multiplier: number;
   baitMultiplier: number;
@@ -127,6 +130,9 @@ export interface FishView extends Pose {
   lastTouch: string | null;
   stealReady: boolean;
   carrierId: string | null;
+  helperId: string | null;
+  liftClaimId: string | null;
+  liftClaimAt: number | null;
   baitPlayerId: string | null;
 }
 

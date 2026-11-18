@@ -8,6 +8,7 @@ import { createActorAssets, makeActor } from './assets/actors';
 import { makeCampaignArt, makeGhost } from './assets/campaign';
 import { crewBadge } from './assets/crew-badge';
 import { makeGeometryKit } from './assets/geometry';
+import { makeLiftMarkers } from './assets/lift-markers';
 import { createModels } from './assets/models';
 import { makeIsland } from './assets/world';
 import { crewColor } from './crew-colors';
@@ -94,7 +95,11 @@ export function createScene(canvas: HTMLCanvasElement) {
   const campaignArt = makeCampaignArt(world, kit, appearances);
   const speechPoint = new T.Vector3();
   const workers = new Map<string, ReturnType<typeof createWorker>>();
-  const fish = new Map<string, ReturnType<typeof models.fish> & { state: FishState; carrierId: string | null }>();
+  const fish = new Map<string, ReturnType<typeof models.fish> & {
+    state: FishState;
+    carrierId: string | null;
+    lift: ReturnType<typeof makeLiftMarkers> | null;
+  }>();
   const crates = new Map<string, ReturnType<typeof models.crate>>();
   const scalePosition = new T.Vector3(ISLAND.scale.x, ISLAND.groundY + 0.56, ISLAND.scale.z);
   const track = new T.RingGeometry(0.94, 1, 44);
@@ -259,7 +264,12 @@ export function createScene(canvas: HTMLCanvasElement) {
     const carryFocus = snapshot.player.carrying ? Math.min(0.48, narrow * 0.72) : 0;
     const transition = delta ? 1 - Math.exp(-2.8 * delta) : 1;
     defenseCamera = T.MathUtils.lerp(defenseCamera, campaign.phase === 'night' || campaign.phase === 'boss' ? 1 : 0, transition);
-    const daytimeX = T.MathUtils.lerp(focus.x * 0.72, scalePosition.x, carryFocus);
+    let daytimeX = T.MathUtils.lerp(focus.x * 0.72, scalePosition.x, carryFocus);
+    if (narrow > 0 && !snapshot.player.carrying) {
+      const looseCargo = snapshot.fish.find(item => item.heavy && item.state === 'stunned'
+        && Math.hypot(item.position.x - focus.x, item.position.z - focus.z) < 4.5);
+      if (looseCargo) daytimeX = T.MathUtils.lerp(daytimeX, looseCargo.position.x, Math.min(0.52, narrow * 0.74));
+    }
     const crab = campaign.enemies.find(enemy => enemy.kind === 'crab')?.position;
     const defenseX = crab ? T.MathUtils.lerp(focus.x * 0.72, crab.x, 0.29) : focus.x * 0.49;
     const dockFraming = Math.max(0, 1 - camera.aspect) * (height < 720 ? 6.4 : 2.35);
@@ -294,6 +304,7 @@ export function createScene(canvas: HTMLCanvasElement) {
     }
     const ragdolled = view.parts.length > 0;
     const entangled = Boolean(view.baitedBy);
+    const holding = Boolean(view.carrying || view.lifting);
     const moved = Math.min(1, view.speed / PLAY.moveSpeed);
     const swing = view.swing;
     player.yaw.visible = !ragdolled;
@@ -344,10 +355,10 @@ export function createScene(canvas: HTMLCanvasElement) {
     rightLeg.rotation.x = view.grounded ? -leftLeg.rotation.x : 0.29;
     head.rotation.z = -lean * 0.68;
     const struggle = entangled ? Math.sin(seconds * 16) * 0.26 : 0;
-    leftArm.rotation.x = entangled ? -0.9 + struggle : view.carrying ? 1.24 : -stride * moved * 0.48;
+    leftArm.rotation.x = entangled ? -0.9 + struggle : holding ? 1.24 : -stride * moved * 0.48;
     leftArm.rotation.z = entangled ? -0.38 : 0;
-    rightArm.rotation.x = entangled ? -0.9 - struggle : view.carrying ? 1.24 : stride * moved * 0.31 + 0.53 - (view.hook.charge * 0.62);
-    player.rod.visible = !entangled && !view.carrying && swing < 0.07;
+    rightArm.rotation.x = entangled ? -0.9 - struggle : holding ? 1.24 : stride * moved * 0.31 + 0.53 - (view.hook.charge * 0.62);
+    player.rod.visible = !entangled && !holding && swing < 0.07;
     player.rod.rotation.x = -view.hook.charge * 0.86;
     player.rod.rotation.y = view.hook.charge * 0.22;
     player.paddle.visible = !entangled && swing >= 0.07;
@@ -398,7 +409,9 @@ export function createScene(canvas: HTMLCanvasElement) {
 
       const badge = worker.badge;
       badge.setName(view.id === localPlayerId ? '你' : view.name);
-      badge.setStatus(view.ghost ? '幽灵' : view.baitedBy ? '当饵中' : view.optimization ? '待优化' : '');
+      const cargo = view.carrying ? snapshot.fish.find(item => item.id === view.carrying && item.heavy) : undefined;
+      const liftStatus = view.lifting ? '等搭手' : cargo?.helperId === view.id ? '帮抬中' : cargo ? '抬鱼中' : '';
+      badge.setStatus(view.ghost ? '幽灵' : view.baitedBy ? '当饵中' : liftStatus || (view.optimization ? '待优化' : ''));
       badge.resize(unitsPerPixel);
       const head = view.parts.find(part => part.limb === 'head')?.position;
       const anchor = head ?? view.position;
@@ -420,15 +433,29 @@ export function createScene(canvas: HTMLCanvasElement) {
   }
 
   function animateFish(snapshot: SimSnapshot, seconds: number) {
+    const findHand = (id: string, target: T.Vector3) => {
+      const worker = workers.get(id);
+      return worker?.actor.hand?.getWorldPosition(target);
+    };
     const updated = new Set<string>();
     for (const [index, item] of snapshot.fish.entries()) {
       updated.add(item.id);
       let model = fish.get(item.id);
       if (!model) {
-        model = { ...models.fish(world, item.kind), state: item.state, carrierId: item.carrierId };
+        model = {
+          ...models.fish(world, item.kind, item.heavy),
+          state: item.state,
+          carrierId: item.carrierId,
+          lift: item.heavy ? makeLiftMarkers(world, kit) : null,
+        };
         fish.set(item.id, model);
       }
       pose(model.animal, item);
+      if (item.heavy && item.state === 'carried') {
+        model.animal.position.y += 0.31;
+        model.animal.rotateY(Math.PI / 2);
+      }
+      model.lift?.animate(item, snapshot.players, model.animal.position, seconds, findHand);
       const swimming = item.state === 'swimming';
       const energetic = item.state === 'flopping' || item.state === 'hooked';
       const speed = energetic ? 27 : 12;
@@ -445,6 +472,7 @@ export function createScene(canvas: HTMLCanvasElement) {
     }
     for (const [id, value] of fish) {
       if (updated.has(id)) continue;
+      value.lift?.dispose();
       value.animal.removeFromParent();
       fish.delete(id);
     }
@@ -495,7 +523,7 @@ export function createScene(canvas: HTMLCanvasElement) {
 
   function animateCatchHelp(snapshot: SimSnapshot, seconds: number, selfId: string | null) {
     const fish = selfId && !snapshot.sold && snapshot.campaign.phase === 'day'
-      ? snapshot.fish.find(item => item.caughtBy === selfId && (item.state === 'flopping' || item.state === 'stunned'))
+      ? snapshot.fish.find(item => item.caughtBy === selfId && (item.state === 'flopping' || (item.state === 'stunned' && !item.heavy)))
       : undefined;
     catchMarker.visible = Boolean(fish);
     if (!fish) return;
