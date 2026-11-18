@@ -8,7 +8,7 @@ export const ISLAND = {
   backZ: 9,
   groundY: 0,
   seaY: -0.5,
-  scale: { x: 5.5, y: 1, z: 0.7, radius: 1.05, aimAssistDistance: 5.2 },
+  scale: { x: 5.5, y: 1, z: 0.7, radius: 1.05, aimAssistDistance: 3.3 },
   spawn: { x: 0, y: 0.85, z: 2.2 },
   supplyCrate: { x: -3.3, y: -0.32, z: -6.1 },
   trainingCrate: { x: -3.2, y: 0.53, z: 1.3 },
@@ -24,6 +24,7 @@ export const CREW = [
 export const PLAY = {
   gravity: 18,
   moveSpeed: 5.25,
+  carrySpeed: 0.75,
   jumpSpeed: 6.1,
   ragdollSeconds: 2,
   crateTripSpeed: 4,
@@ -35,6 +36,10 @@ export const PLAY = {
   airBonus: 0.35,
   maxMultiplier: 2.4,
   stunSeconds: 14,
+  fishEscapeSeconds: 0.8,
+  fishHop: { side: 5.6, seaward: [2.55, 3.95], height: [4.3, 5.1], interval: [0.37, 0.54] },
+  fishHit: { side: 3.9, forward: 1.75, height: 3.35 },
+  fishStunHit: { side: 3, forward: 0.9, height: 2.45 },
   stealGrace: 0.42,
   friendlyKnockback: 4.4,
   friendlyArc: 0.55,
@@ -46,8 +51,11 @@ export const FISHING = {
   chargeSeconds: 1.12,
   minRange: 2.8,
   maxRange: 12.4,
-  biteMin: 0.75,
-  biteMax: 1.47,
+  biteMin: 7.2,
+  biteMax: 9.8,
+  goodSpots: [{ x: -1.7, z: -8.1 }, { x: 1.6, z: -8.1 }],
+  goodSpotRadius: 2.2,
+  offSpotDelay: 1.8,
   approachSeconds: 0.37,
   lineSlackSeconds: 5.5,
   minFishingZ: -17,
@@ -56,41 +64,50 @@ export const FISHING = {
   teammateHookRadius: 0.8,
   teammateSlackSeconds: 6,
   baitBiteSeconds: 0.76,
+  baitPriceMultiplier: 1.8,
   baitWeights: { sardine: 0, puffer: 58, grouper: 42 },
 } as const;
 
 export const FISH = {
-  sardine: { name: '银条鱼', price: 20, size: 0.82, taps: 6, hits: 1, weight: 52 },
+  sardine: { name: '银条鱼', price: 20, size: 0.82, taps: 6, hits: 2, weight: 52 },
   puffer: { name: '气鼓鱼', price: 34, size: 1.04, taps: 7, hits: 2, weight: 32 },
   grouper: { name: '欠薪斑', price: 52, size: 1.27, taps: 8, hits: 3, weight: 16 },
 } as const;
 
 export const SHIFT = {
-  bonus: 20,
-  resultSeconds: 8,
+  bonusRate: 0.25,
+  fineRate: 0.2,
   shortestSeconds: 10,
   optimizationSpeed: 0.9,
 } as const;
 
-// Team targets for the three-day cycles in the design. Settlement arrives in M5.
-export const TEAM_KPI = [125, 195, 290, 420] as const;
+export const TEAM_DAILY_KPI = [1350, 1425, 1500, 1575] as const;
+
+// Three-day settlement arrives in M5. Each cycle sums its three daily targets.
+export const TEAM_KPI = [4275, 4725, 4725, 4725] as const;
 
 export const BOTS = {
-  laneZ: -1.55,
-  castZ: -8.1,
-  dropZ: -0.36,
+  laneZ: -1.45,
+  crossing: { x: 2.95, z: 0.78 },
+  crossingReach: 2.35,
   shoreInset: 0.86,
   castHold: [0.59, 0.75],
   reelCadence: [0.13, 0.25],
   throwWindup: [0.29, 0.43],
-  shiftBreak: [7.4, 11.8],
-  firstMischief: [11, 16],
-  mischiefCooldown: [7, 12],
-  mischiefReach: 1.95,
-  roughhouseChance: 0.13,
+  shiftBreak: [4.7, 8.4],
+  firstMischief: [18, 23],
+  mischiefCooldown: [10.5, 15.5],
+  rethinkSeconds: [0.72, 1.5],
+  chaseSeconds: 1.85,
+  victimRest: 14,
+  mischiefReach: 6.4,
+  leaderChance: 0.88,
+  crewChance: 0.62,
+  leaderWeight: 3.1,
+  interferenceWeight: 0.84,
   profiles: {
-    'bot-1': { laneX: -6.1, dropX: 3.3, start: 3.85, jumpChance: 0.16, stealChance: 0.31 },
-    'bot-2': { laneX: 2.85, dropX: 4.2, start: 5.3, jumpChance: 0.48, stealChance: 0.46 },
-    'bot-3': { laneX: 7.25, dropX: 7.2, start: 4.6, jumpChance: 0.29, stealChance: 0.64 },
+    'bot-1': { station: 0, depthOffset: 0.07, drop: { x: 3.8, z: 0.35 }, start: 5.9, jumpChance: 0.16, stealChance: 0.52 },
+    'bot-2': { station: 1, depthOffset: -0.48, drop: { x: 4.15, z: -0.18 }, start: 6.7, jumpChance: 0.40, stealChance: 0.62 },
+    'bot-3': { station: 1, depthOffset: 0.62, drop: { x: 4.15, z: 1.15 }, start: 7.9, jumpChance: 0.22, stealChance: 0.71 },
   },
 } as const;

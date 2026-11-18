@@ -35,12 +35,29 @@ export interface SimInput {
   swingPressed: boolean;
   interactPressed: boolean;
   jumpPressed: boolean;
+  continuePressed?: boolean;
 }
 
 export type RagdollLimb = 'torso' | 'head' | 'leftArm' | 'rightArm' | 'leftLeg' | 'rightLeg';
 
 export interface RagdollPart extends Pose {
   limb: RagdollLimb;
+}
+
+export interface PlayerMetrics {
+  interference: number;
+  paddleHits: number;
+  fishStolen: number;
+  knockdowns: number;
+  fishEscaped: number;
+  fishIncidents: number;
+}
+
+export interface ShiftMetrics {
+  fishEscaped: number;
+  fishTransferred: number;
+  /** Distinct fish that either escaped or changed hands. */
+  fishIncidents: number;
 }
 
 export interface PlayerView extends Pose {
@@ -51,6 +68,7 @@ export interface PlayerView extends Pose {
   sold: number;
   shiftCash: number;
   shiftSold: number;
+  metrics: PlayerMetrics;
   optimization: boolean;
   /** ID of the teammate who hooked or launched this worker. */
   baitedBy: string | null;
@@ -78,14 +96,17 @@ export interface HookView {
 }
 
 export type FishKind = 'sardine' | 'puffer' | 'grouper';
-export type FishState = 'swimming' | 'hooked' | 'flopping' | 'stunned' | 'carried' | 'thrown';
+export type FishState = 'swimming' | 'hooked' | 'flopping' | 'escaping' | 'stunned' | 'carried' | 'thrown';
 
 export interface FishView extends Pose {
   id: string;
   kind: FishKind;
   state: FishState;
   multiplier: number;
+  baitMultiplier: number;
   caughtBy: string;
+  lastTouch: string | null;
+  stealReady: boolean;
   carrierId: string | null;
   baitPlayerId: string | null;
 }
@@ -99,6 +120,7 @@ export interface SimNotice {
   id: number;
   text: string;
   tone: 'info' | 'good' | 'bad';
+  cue?: 'fish_escape';
 }
 
 export interface ShiftEntry {
@@ -109,13 +131,13 @@ export interface ShiftEntry {
   revenue: number;
   sold: number;
   bonus: number;
+  fine: number;
   optimization: boolean;
 }
 
 export interface ShiftResult {
   day: number;
   ranking: ShiftEntry[];
-  showUntil: number;
 }
 
 export interface SimSnapshot {
@@ -126,6 +148,10 @@ export interface SimSnapshot {
   player: PlayerView;
   players: PlayerView[];
   shiftRemaining: number;
+  shiftPaused: boolean;
+  teamRevenue: number;
+  teamTarget: number;
+  metrics: ShiftMetrics;
   result: ShiftResult | null;
   hook: HookView;
   fish: FishView[];

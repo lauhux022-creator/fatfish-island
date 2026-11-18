@@ -1,4 +1,4 @@
-import { ISLAND, PLAY } from '../shared/sim/config';
+import { ISLAND, PLAY, SHIFT } from '../shared/sim/config';
 import type { FishView, ShiftEntry, SimSnapshot } from '../shared/sim/types';
 import { crewColor } from './crew-colors';
 
@@ -18,8 +18,8 @@ interface Guide {
 
 const firstCast: Guide = {
   title: '上工了，先甩一竿',
-  desktop: '瞄准海面，按住鼠标左键蓄力，松手抛竿。',
-  touch: '轻点海面瞄准，按住「投／收」蓄力，松手抛竿。',
+  desktop: '瞄准海上的浅金涟漪，按住左键蓄力，松手抛竿。',
+  touch: '轻点浅金涟漪，按住「投／收」蓄力，松手抛竿。',
 };
 
 const nextCast: Guide = {
@@ -47,13 +47,16 @@ function fishingGuide(snapshot: SimSnapshot): Guide | undefined {
     case 'waiting':
       return { title: '鱼在开会，等等', desktop: '浮标沉下去就开始收线。', touch: '浮标沉下去就开始收线。' };
     case 'bite':
-    case 'reeling':
+    case 'reeling': {
+      const baitMultiplier = snapshot.fish.find((item) => item.id === hook.targetId)?.baitMultiplier ?? 1;
       return {
-        title: hook.target === 'crate' ? '钩到箱子了！' : '鱼咬钩啦！',
+        title: baitMultiplier > 1 ? `活饵溢价 ×${baitMultiplier}` :
+          hook.target === 'crate' ? '钩到箱子了！' : '鱼咬钩啦！',
         desktop: `连点鼠标左键，把${catchName}拽上岸。`,
         touch: `连点「投／收」，把${catchName}拽上岸。`,
         meter: hook.progress,
       };
+    }
     case 'idle':
       return undefined;
   }
@@ -74,9 +77,10 @@ function guideFor(snapshot: SimSnapshot): Guide {
     return { title: '你被队友钩住了！', desktop: '', touch: '' };
   }
 
-  if (player.carrying && fish.some((item) => item.id === player.carrying)) {
+  const heldFish = fish.find((item) => item.id === player.carrying);
+  if (heldFish) {
     return {
-      title: '把鱼扔进橙色秤盘',
+      title: heldFish.baitMultiplier > 1 ? `活饵溢价 ×${heldFish.baitMultiplier}，快上秤` : '把鱼扔进橙色秤盘',
       desktop: '走到秤前，朝秤盘按 E 抛鱼。',
       touch: '走到秤前，轻点秤盘瞄准，再按「搬／扔」。',
     };
@@ -134,6 +138,13 @@ const markup = `
         <h1><small>大肥鱼的</small>黑心渔场</h1>
       </div>
       <p class="shift-strip"><span data-day>第 — 天</span><i></i><span>下班 <time data-clock>—:—</time></span></p>
+      <section class="shift-kpi" aria-label="当日团队指标" data-kpi>
+        <div class="shift-kpi-label">
+          <span>团队指标</span>
+          <strong><span data-team-revenue>¥0</span><span class="kpi-divider"> / </span><span data-team-target>—</span></strong>
+        </div>
+        <progress max="1" value="0" aria-label="团队指标完成进度" data-team-progress></progress>
+      </section>
     </div>
     <div class="account">
       <section class="ledger" aria-label="渔场账本">
@@ -144,7 +155,7 @@ const markup = `
     </div>
   </header>
   <p class="notice" data-notice role="status" hidden></p>
-  <aside class="standings" id="standings" aria-labelledby="standings-title" data-standings hidden>
+  <dialog class="standings" id="standings" aria-labelledby="standings-title" data-standings hidden>
     <div class="standings-head">
       <h2 id="standings-title" data-standings-title></h2>
       <span class="standings-stamp" data-standings-stamp>已结算</span>
@@ -153,8 +164,17 @@ const markup = `
       <thead><tr><th scope="col">名次</th><th scope="col">打工人</th><th scope="col">尾数</th><th scope="col">渔获款</th></tr></thead>
       <tbody data-standings-rows></tbody>
     </table>
-    <p class="standings-note" data-standings-note>待优化次日移速 −10%</p>
-  </aside>
+    <div class="settlement" data-settlement hidden>
+      <div class="settlement-summary">
+        <span>团队指标</span>
+        <strong data-settlement-kpi></strong>
+        <span class="settlement-status" data-settlement-status></span>
+      </div>
+      <p class="standings-note" data-standings-note></p>
+      <p class="shift-interview" data-shift-interview hidden></p>
+      <button type="button" class="shift-continue" data-control="continue">开始下一班 <kbd>Enter</kbd></button>
+    </div>
+  </dialog>
   <aside class="task" aria-label="当前操作">
     <div class="task-mark" aria-hidden="true"><i></i></div>
     <div class="task-content">
@@ -182,14 +202,14 @@ const markup = `
           <li><b>拍晕</b> WASD 追上鱼，瞄准后按 F 或右键挥桨，空格跳起还能接一桨。</li>
           <li><b>交鱼</b> 靠近晕鱼按 E 抬起，朝橙色秤盘按 E 扔进去。</li>
           <li><b>截胡</b> 靠近别人手里的鱼或半空中的鱼，朝鱼按 E 抢。</li>
-          <li><b>队友饵</b> 朝队友甩钩，再瞄准海面点左键。大鱼上钩后，鱼饵本人拿不到绩效。</li>
+          <li><b>队友饵</b> 朝队友甩钩，再瞄准海面点左键。活饵渔获售价更高，饵员拿不到绩效。</li>
         </ol>
         <ol class="touch-guide">
           <li><b>钓鱼</b> 点海面瞄准。长按抛竿，咬钩后连点收线。</li>
           <li><b>拍晕</b> 用方向键追上鱼，点鱼瞄准，按「挥桨」。</li>
           <li><b>交鱼</b> 靠近晕鱼按「搬／扔」，朝橙色秤盘再按一下。</li>
           <li><b>截胡</b> 靠近并瞄准别人手里或半空中的鱼，点「搬／扔」抢。</li>
-          <li><b>队友饵</b> 点队友瞄准并甩钩，再点海面按「投／收」。鱼饵本人拿不到绩效。</li>
+          <li><b>队友饵</b> 点队友瞄准并甩钩，再点海面按「投／收」。活饵渔获售价更高，饵员拿不到绩效。</li>
         </ol>
         <p>桨能把队友拍飞，躺两秒就能起来。鱼钩也能勾海上的木箱。</p>
       </div>
@@ -245,16 +265,24 @@ export function createHud(root: HTMLElement, meta: HudMeta) {
   const debugText = ui('[data-debug-text]');
   const manual = ui<HTMLDetailsElement>('.manual');
   const clock = ui<HTMLTimeElement>('[data-clock]');
-  const standings = ui<HTMLElement>('[data-standings]');
+  const kpi = ui<HTMLElement>('[data-kpi]');
+  const teamRevenue = ui('[data-team-revenue]');
+  const teamTarget = ui('[data-team-target]');
+  const teamProgress = ui<HTMLProgressElement>('[data-team-progress]');
+  const standings = ui<HTMLDialogElement>('[data-standings]');
   const toggle = ui<HTMLButtonElement>('[data-standings-toggle]');
   const standingsTitle = ui('[data-standings-title]');
   const stamp = ui<HTMLElement>('[data-standings-stamp]');
-  const standingsNote = ui<HTMLElement>('[data-standings-note]');
   const standingsRows = ui<HTMLTableSectionElement>('[data-standings-rows]');
+  const settlement = ui<HTMLElement>('[data-settlement]');
+  const settlementKpi = ui('[data-settlement-kpi]');
+  const settlementStatus = ui('[data-settlement-status]');
   let previousBoard = '';
   let boardPinned = false;
-  let dismissedDay = 0;
   let latest: SimSnapshot | undefined;
+
+  const speedPenalty = Math.round((1 - SHIFT.optimizationSpeed) * 100);
+  writeText(ui('[data-standings-note]'), `待优化次日移速 −${speedPenalty}%`);
 
   function fillStandings(ranking: ShiftEntry[], ownId: string) {
     const rows = ranking.map((entry) => {
@@ -267,10 +295,11 @@ export function createHud(root: HTMLElement, meta: HudMeta) {
       swatch.className = 'crew-dot';
       swatch.style.background = crewColor(entry.id);
       name.append(swatch, entry.name);
-      if (entry.bonus || entry.optimization) {
+      if (entry.bonus || entry.optimization || entry.fine) {
         const award = document.createElement('small');
         award.className = entry.bonus ? 'earnings-badge' : 'optimization-badge';
-        award.textContent = entry.bonus ? `年终奖 +¥${entry.bonus}` : '明日待优化';
+        award.textContent = entry.bonus ? `奖金 +¥${entry.bonus}` :
+          entry.fine ? `待优化 −¥${entry.fine}` : '明日待优化';
         name.append(award);
       }
       row.insertCell().textContent = String(entry.sold);
@@ -280,41 +309,61 @@ export function createHud(root: HTMLElement, meta: HudMeta) {
     standingsRows.replaceChildren(...rows);
   }
 
+  function updateKpi({ teamRevenue: total, teamTarget: target }: SimSnapshot) {
+    writeText(teamRevenue, `¥${total}`);
+    writeText(teamTarget, `¥${target}`);
+    const value = Math.min(total, target);
+    if (teamProgress.max !== target) teamProgress.max = target;
+    if (teamProgress.value !== value) teamProgress.value = value;
+    const met = String(total >= target);
+    if (kpi.dataset.met !== met) kpi.dataset.met = met;
+  }
+
   function updateStandings(snapshot: SimSnapshot) {
-    const { result, players, player, time } = snapshot;
-    const settled = result && time < result.showUntil && result.day !== dismissedDay ? result : null;
-    const visible = !!settled || boardPinned;
-    const hidden = !visible;
-    if (standings.hidden !== hidden) {
-      standings.hidden = hidden;
+    const { result, players, player, shiftPaused, teamRevenue, teamTarget } = snapshot;
+    const settled = shiftPaused ? result : null;
+    if (shiftPaused) boardPinned = false;
+    const visible = shiftPaused || boardPinned;
+    if (standings.open && (!visible || standings.matches(':modal') !== shiftPaused)) standings.close();
+    if (standings.hidden === visible) {
+      standings.hidden = !visible;
       toggle.setAttribute('aria-expanded', String(visible));
     }
-    if (hidden) return;
+    if (!visible) return;
 
     const ranking = settled?.ranking ?? [...players]
       .sort((a, b) => b.shiftCash - a.shiftCash || b.shiftSold - a.shiftSold)
       .map(({ id, name, bot, shiftCash, shiftSold }, index) => ({
-        id, name, bot, rank: index + 1, revenue: shiftCash, sold: shiftSold, bonus: 0, optimization: false,
+        id, name, bot, rank: index + 1, revenue: shiftCash, sold: shiftSold, bonus: 0, fine: 0, optimization: false,
       }));
     const displayDay = settled?.day ?? snapshot.day;
-    const key = JSON.stringify([displayDay, Boolean(settled), ranking]);
-    if (key === previousBoard) return;
-
-    previousBoard = key;
-    standings.dataset.day = String(displayDay);
-    standings.dataset.settled = String(Boolean(settled));
-    writeText(standingsTitle, `第 ${displayDay} 天绩效榜`);
-    stamp.hidden = !settled;
-    standingsNote.hidden = !settled;
-    fillStandings(ranking, player.id);
+    const key = JSON.stringify([displayDay, Boolean(settled), teamRevenue, teamTarget, ranking]);
+    if (key !== previousBoard) {
+      previousBoard = key;
+      standings.dataset.day = String(displayDay);
+      standings.dataset.settled = String(Boolean(settled));
+      writeText(standingsTitle, `第 ${displayDay} 天绩效榜`);
+      stamp.hidden = !settled;
+      settlement.hidden = !settled;
+      if (settled) {
+        writeText(settlementKpi, `¥${teamRevenue} / ¥${teamTarget}`);
+        writeText(settlementStatus, teamRevenue >= teamTarget ? '达标' : '未达标');
+        settlementStatus.classList.toggle('met', teamRevenue >= teamTarget);
+      }
+      fillStandings(ranking, player.id);
+    }
+    if (!standings.open) {
+      if (shiftPaused) standings.showModal();
+      else standings.show();
+    }
   }
 
   toggle.addEventListener('click', () => {
-    if (!latest) return;
-    boardPinned = standings.hidden;
-    if (!boardPinned) dismissedDay = latest.result?.day ?? 0;
+    if (!latest || latest.shiftPaused) return;
+    boardPinned = !boardPinned;
     updateStandings(latest);
   });
+  standings.addEventListener('cancel', (event) => event.preventDefault());
 
   writeText(ui('[data-version]'), meta.version);
   writeText(ui('[data-commit]'), meta.commit);
@@ -325,7 +374,6 @@ export function createHud(root: HTMLElement, meta: HudMeta) {
 
   let lastNotice: number | null = null;
   let noticeUntil = 0;
-  let debugTick = -1;
 
   function update(snapshot: SimSnapshot) {
     const { hook, player, fish, crates, notice: event, tick, time } = snapshot;
@@ -334,6 +382,7 @@ export function createHud(root: HTMLElement, meta: HudMeta) {
     const seconds = Math.max(0, Math.ceil(snapshot.shiftRemaining));
     writeText(day, `第 ${snapshot.day} 天`);
     writeText(clock, `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`);
+    updateKpi(snapshot);
     updateStandings(snapshot);
     writeText(cash, `¥${snapshot.cash}`);
     const soldCount = `${snapshot.sold} `;
@@ -356,8 +405,7 @@ export function createHud(root: HTMLElement, meta: HudMeta) {
     }
     notice.hidden = !event || time >= noticeUntil;
 
-    if (!meta.debug || debugTick === tick) return;
-    debugTick = tick;
+    if (!meta.debug) return;
     Object.assign(debug.dataset, {
       tick: String(tick),
       day: String(snapshot.day),
@@ -374,6 +422,18 @@ export function createHud(root: HTMLElement, meta: HudMeta) {
       fishStates: fish.map((item) => `${item.kind}:${item.state}`).join(','),
       crateStates: crates.map((item) => `${item.id}:${item.state}`).join(','),
       shiftRemaining: snapshot.shiftRemaining.toFixed(2),
+      shiftPaused: String(snapshot.shiftPaused),
+      teamRevenue: String(snapshot.teamRevenue),
+      teamTarget: String(snapshot.teamTarget),
+      interference: String(player.metrics.interference),
+      paddleHits: String(player.metrics.paddleHits),
+      fishStolen: String(player.metrics.fishStolen),
+      knockdowns: String(player.metrics.knockdowns),
+      playerFishEscaped: String(player.metrics.fishEscaped),
+      playerFishIncidents: String(player.metrics.fishIncidents),
+      fishEscaped: String(snapshot.metrics.fishEscaped),
+      fishTransferred: String(snapshot.metrics.fishTransferred),
+      fishIncidents: String(snapshot.metrics.fishIncidents),
       players: snapshot.players.map(({ id, shiftCash, shiftSold }) => `${id}:${shiftCash}/${shiftSold}`).join(','),
     });
     const entities = [...fish.filter((item) => item.state !== 'swimming'), ...crates];
@@ -381,8 +441,11 @@ export function createHud(root: HTMLElement, meta: HudMeta) {
       `seed ${meta.seed}   tick ${tick}   ${time.toFixed(1)} s`,
       `人 ${position(player.position)}${player.ragdoll ? `   倒地 ${player.ragdoll.toFixed(1)} s` : ''}`,
       `钩 ${hook.phase}${hook.targetId ? ` · ${hook.targetId}` : ''}`,
+      `个人 干扰 ${player.metrics.interference} · 被抢 ${player.metrics.fishStolen} · 挨桨 ${player.metrics.paddleHits} · 倒地 ${player.metrics.knockdowns}`,
+      `个人渔获 逃跑 ${player.metrics.fishEscaped} · 涉鱼 ${player.metrics.fishIncidents}`,
+      `全队 逃跑 ${snapshot.metrics.fishEscaped} · 易手 ${snapshot.metrics.fishTransferred} · 涉鱼 ${snapshot.metrics.fishIncidents}`,
       ...snapshot.players.filter((member) => member.bot).map((member) =>
-        `${member.name} ${position(member.position)} ¥${member.shiftCash} ${member.hook.phase}`),
+        `${member.name} ${position(member.position)} ¥${member.shiftCash} ${member.hook.phase} 干扰 ${member.metrics.interference}`),
       ...entities.map((item) => `${item.id} ${item.state} ${position(item.position)}`),
     ].join('\n'));
   }

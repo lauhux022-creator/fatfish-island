@@ -67,6 +67,13 @@ async function startGame() {
     const target = event.target;
     if (event.ctrlKey || event.metaKey || event.altKey || event.defaultPrevented) return;
     if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable]')) return;
+    if (snapshot.shiftPaused) {
+      if (event.code === 'Enter' || event.code === 'NumpadEnter') {
+        event.preventDefault();
+        if (!event.repeat) input.continuePressed = true;
+      }
+      return;
+    }
     if (target instanceof HTMLElement && target.closest('button, summary') && event.code === 'Space') return;
     if (!['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
       'Space', 'KeyF', 'KeyE', 'KeyM'].includes(event.code)) return;
@@ -89,10 +96,11 @@ async function startGame() {
   }, options);
 
   hud.canvas.addEventListener('pointermove', (event) => {
-    if (event.pointerType !== 'touch') aimPointer = { x: event.clientX, y: event.clientY };
+    if (!snapshot.shiftPaused && event.pointerType !== 'touch') aimPointer = { x: event.clientX, y: event.clientY };
   }, options);
 
   hud.canvas.addEventListener('pointerdown', (event) => {
+    if (snapshot.shiftPaused) return;
     sound.unlock();
     if (document.activeElement instanceof HTMLButtonElement) document.activeElement.blur();
     aimPointer = { x: event.clientX, y: event.clientY };
@@ -121,6 +129,7 @@ async function startGame() {
   hud.canvas.addEventListener('contextmenu', (event) => event.preventDefault(), options);
 
   app.addEventListener('pointerdown', (event) => {
+    if (snapshot.shiftPaused) return;
     if (!(event.target instanceof Element)) return;
     const button = event.target.closest<HTMLElement>('[data-control]');
     const control = button?.dataset.control;
@@ -148,7 +157,10 @@ async function startGame() {
   app.addEventListener('pointercancel', releaseTouch, options);
   app.addEventListener('lostpointercapture', releaseTouch, options);
   app.addEventListener('click', (event) => {
-    if (event.target instanceof Element && event.target.closest('[data-control="sound"]')) {
+    if (!(event.target instanceof Element)) return;
+    const control = event.target.closest<HTMLElement>('[data-control]')?.dataset.control;
+    if (control === 'continue' && snapshot.shiftPaused) input.continuePressed = true;
+    if (control === 'sound') {
       sound.unlock();
       toggleMute();
     }
@@ -160,14 +172,20 @@ async function startGame() {
 
   const stepMs = STEP_SECONDS * 1000;
   let previous = performance.now();
-  const start = previous;
+  let sceneElapsed = 0;
   let accumulated = 0;
   let raf = 0;
-  let lastUiTick = -20;
+  let lastUiSnapshot: SimSnapshot | undefined;
 
   function frame(now: number) {
-    accumulated += Math.min(now - previous, 100);
+    const elapsedMs = Math.min(now - previous, 100);
     previous = now;
+    if (!snapshot.shiftPaused) {
+      accumulated += elapsedMs;
+      sceneElapsed += elapsedMs / 1000;
+    } else if (input.continuePressed) {
+      accumulated = stepMs;
+    }
 
     while (accumulated >= stepMs) {
       input.moveX = direction('KeyD', 'ArrowRight', 'right') - direction('KeyA', 'ArrowLeft', 'left');
@@ -176,20 +194,27 @@ async function startGame() {
       sim.step(input);
       const next = sim.snapshot();
       sound.update(snapshot, next);
+      const pauseChanged = next.shiftPaused !== snapshot.shiftPaused;
+      if (pauseChanged) {
+        pressed.clear();
+        touch.clear();
+        mouseCast = false;
+        input.castHeld = false;
+      }
       snapshot = next;
       input.castPressed = false;
       input.castReleased = false;
       input.swingPressed = false;
       input.interactPressed = false;
       input.jumpPressed = false;
-      accumulated -= stepMs;
+      input.continuePressed = false;
+      accumulated = pauseChanged ? 0 : accumulated - stepMs;
     }
 
-    scene.render(snapshot, (now - start) / 1000);
-    // Charging and reeling need direct feedback. Other HUD updates can share the same refresh.
-    if (snapshot.tick !== lastUiTick) {
+    scene.render(snapshot, sceneElapsed);
+    if (snapshot !== lastUiSnapshot) {
       hud.update(snapshot);
-      lastUiTick = snapshot.tick;
+      lastUiSnapshot = snapshot;
     }
     raf = requestAnimationFrame(frame);
   }

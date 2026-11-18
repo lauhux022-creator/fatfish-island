@@ -1,9 +1,9 @@
 import RAPIER, { type ColliderDesc, type RigidBody } from '@dimforge/rapier3d-compat';
 import { createBotController } from './bots';
 import { seededRandom } from './random';
-import { CREW, FISH, FISHING, ISLAND, PLAY, SHIFT, STEP_SECONDS, TICKS_PER_SECOND } from './config';
+import { CREW, FISH, FISHING, ISLAND, PLAY, SHIFT, STEP_SECONDS, TEAM_DAILY_KPI, TICKS_PER_SECOND } from './config';
 import type {
-  CrateView, FishKind, FishState, HookPhase, HookView, PlayerView, Pose, RagdollLimb, Rotation,
+  CrateView, FishKind, FishState, HookPhase, HookView, PlayerMetrics, PlayerView, Pose, RagdollLimb, Rotation,
   ShiftResult, SimInput, SimNotice, SimSnapshot, Vec3,
 } from './types';
 
@@ -23,11 +23,13 @@ interface Fish {
   lastTouch: string | null;
   caughtBy: string;
   carrierId: string | null;
+  thrownBy: string | null;
   baitPlayerId: string | null;
   grabAgainAt: number;
   multiplier: number;
   wakeAt: number;
   hopAt: number;
+  escapeAt: number;
 }
 
 interface Crate {
@@ -62,6 +64,12 @@ interface Direction {
   z: number;
 }
 
+type ActorMetrics = Omit<PlayerMetrics, 'interference' | 'fishIncidents'> & { fishIncidents: Set<string> };
+
+function newActorMetrics(): ActorMetrics {
+  return { paddleHits: 0, fishStolen: 0, knockdowns: 0, fishEscaped: 0, fishIncidents: new Set() };
+}
+
 interface Actor {
   id: string;
   name: string;
@@ -84,6 +92,7 @@ interface Actor {
   sold: number;
   shiftCash: number;
   shiftSold: number;
+  metrics: ActorMetrics;
   optimization: boolean;
 }
 
@@ -151,12 +160,16 @@ class IslandSimulation {
   private readonly actors: Actor[];
   private readonly crates: Crate[];
   private readonly fish: Fish[] = [];
+  private readonly transferredFish = new Set<string>();
+  private readonly affectedFish = new Set<string>();
+  private escapedFish = 0;
   private readonly seed: string;
   private readonly random: () => number;
   private readonly bots: ReturnType<typeof createBotController>;
   private readonly shiftLength: number;
   private day: number;
   private shiftEnd: number;
+  private shiftPaused = false;
   private result: ShiftResult | null = null;
   private tick = 0;
   private nextEntityId = 0;
@@ -190,6 +203,10 @@ class IslandSimulation {
   }
 
   step(input: SimInput, overrides: Readonly<Record<string, SimInput>> = {}) {
+    if (this.shiftPaused) {
+      if (input.continuePressed) this.startNextShift();
+      return;
+    }
     const previous = this.actors.some((actor) => actor.bot && !overrides[actor.id]) ? this.snapshot() : null;
     const inputs = this.actors.map((actor, index) => {
       if (!actor.bot) return input;
@@ -231,9 +248,21 @@ class IslandSimulation {
       players,
       hook: player.hook,
       shiftRemaining: (this.shiftEnd - this.tick) * STEP_SECONDS,
+      shiftPaused: this.shiftPaused,
+      teamRevenue: players.reduce((sum, worker) => sum + worker.shiftCash, 0),
+      teamTarget: this.teamTarget,
+      metrics: {
+        fishEscaped: this.escapedFish,
+        fishTransferred: this.transferredFish.size,
+        fishIncidents: this.affectedFish.size,
+      },
       result: this.result && { ...this.result, ranking: this.result.ranking.map((entry) => ({ ...entry })) },
-      fish: this.fish.map(({ id, body, kind, state, multiplier, caughtBy, carrierId, baitPlayerId }) =>
-        ({ id, kind, state, multiplier, caughtBy, carrierId, baitPlayerId, ...pose(body) })),
+      fish: this.fish.map(({ id, body, kind, state, multiplier, caughtBy, carrierId, baitPlayerId, lastTouch, grabAgainAt }) =>
+        ({
+          id, kind, state, multiplier, caughtBy, carrierId, baitPlayerId, lastTouch, ...pose(body),
+          baitMultiplier: baitPlayerId ? FISHING.baitPriceMultiplier : 1,
+          stealReady: state === 'thrown' || (state === 'carried' && this.time >= grabAgainAt),
+        })),
       crates: this.crates.map(({ id, body, state }) => ({ id, state, ...pose(body) })),
       cash: player.cash,
       sold: player.sold,
@@ -249,9 +278,15 @@ class IslandSimulation {
     return this.tick * STEP_SECONDS;
   }
 
-  private announce(actor: Actor, text: string, tone: SimNotice['tone'] = 'info', other?: Actor) {
+  private get teamTarget() {
+    const target = TEAM_DAILY_KPI[Math.min(this.day - 1, TEAM_DAILY_KPI.length - 1)];
+    // Short shifts exist for reproducing the same rules via the debug override.
+    return Math.round(target * this.shiftLength / (PLAY.daySeconds * TICKS_PER_SECOND));
+  }
+
+  private announce(actor: Actor, text: string, tone: SimNotice['tone'] = 'info', other?: Actor, cue?: SimNotice['cue']) {
     if (actor.bot && other?.bot !== false) return;
-    this.notice = { id: ++this.noticeId, text, tone };
+    this.notice = { id: ++this.noticeId, text, tone, cue };
   }
 
   private makeActor({ id, name, bot, spawn }: (typeof CREW)[number]): Actor {
@@ -264,18 +299,20 @@ class IslandSimulation {
       random: seededRandom(bot ? `${this.seed}:${id}` : this.seed),
       yaw: 0, aim: { x: 0, z: -1 }, groundContact: true, moveSpeed: 0, swingUntil: 0,
       ragdoll: [], recoverTick: 0, nextTripAt: 0, carrying: null, hook: newHook(),
-      baitedBy: null, cash: 0, sold: 0, shiftCash: 0, shiftSold: 0, optimization: false,
+      baitedBy: null, cash: 0, sold: 0, shiftCash: 0, shiftSold: 0, metrics: newActorMetrics(), optimization: false,
     };
   }
 
   private viewActor(actor: Actor): PlayerView {
     const { id, name, bot, cash, sold, shiftCash, shiftSold, optimization, yaw, ragdoll } = actor;
+    const { fishIncidents, ...metrics } = actor.metrics;
     const body = ragdoll[0]?.body ?? actor.body;
     const hook = actor.hook;
     const target: HookView['target'] = hook.bait ? 'player' : hook.target ? (isFish(hook.target) ? 'fish' : 'crate') : null;
     return {
       ...pose(body),
       id, name, bot, cash, sold, shiftCash, shiftSold, optimization, yaw,
+      metrics: { ...metrics, fishIncidents: fishIncidents.size, interference: metrics.paddleHits + metrics.fishStolen },
       baitedBy: actor.baitedBy?.id ?? null,
       rotation: ragdoll.length ? body.rotation() : yawRotation(yaw),
       speed: ragdoll.length ? 0 : Math.hypot(body.linvel().x, body.linvel().z),
@@ -300,22 +337,37 @@ class IslandSimulation {
     const ordered = [...this.actors].sort((a, b) => b.shiftCash - a.shiftCash || b.shiftSold - a.shiftSold);
     this.result = {
       day: this.day,
-      showUntil: this.time + SHIFT.resultSeconds,
       ranking: ordered.map((actor, index) => ({
         id: actor.id, name: actor.name, bot: actor.bot, rank: index + 1,
         revenue: actor.shiftCash, sold: actor.shiftSold,
-        bonus: index === 0 ? SHIFT.bonus : 0,
+        bonus: index === 0 ? Math.round(actor.shiftCash * SHIFT.bonusRate) : 0,
+        fine: index === ordered.length - 1 ? Math.round(actor.shiftCash * SHIFT.fineRate) : 0,
         optimization: index === ordered.length - 1,
       })),
     };
     for (const [index, actor] of ordered.entries()) {
-      if (index === 0) actor.cash += SHIFT.bonus;
-      actor.optimization = index === ordered.length - 1;
+      const { bonus, fine } = this.result.ranking[index];
+      actor.cash = Math.max(0, actor.cash + bonus - fine);
+    }
+    this.shiftPaused = true;
+  }
+
+  private startNextShift() {
+    const lowest = this.result?.ranking.at(-1)?.id;
+    for (const actor of this.actors) {
+      actor.optimization = actor.id === lowest;
       actor.shiftCash = 0;
       actor.shiftSold = 0;
+      actor.metrics = newActorMetrics();
+      if (actor.hook.phase === 'charging') this.clearHook(actor);
     }
+    this.escapedFish = 0;
+    this.transferredFish.clear();
+    this.affectedFish.clear();
+    this.notice = null;
     this.day += 1;
-    this.shiftEnd += this.shiftLength;
+    this.shiftEnd = this.tick + this.shiftLength;
+    this.shiftPaused = false;
   }
 
   private makeCrate(id: string, origin: Vec3, state: CrateView['state'], halfSize: number): Crate {
@@ -342,7 +394,7 @@ class IslandSimulation {
     actor.groundContact = position.y <= PLAYER_HEIGHT + 0.08 && Math.abs(velocity.y) < 0.7 && onLand(position);
     const easing = actor.groundContact ? 0.36 : 0.12;
     const penalty = actor.optimization ? SHIFT.optimizationSpeed : 1;
-    const speed = actor.baitedBy ? 0 : PLAY.moveSpeed * penalty * (actor.carrying ? 0.87 : 1);
+    const speed = actor.baitedBy ? 0 : PLAY.moveSpeed * penalty * (actor.carrying ? PLAY.carrySpeed : 1);
     actor.moveSpeed = Math.hypot(move.x, move.z) * speed;
     const jumping = input.jumpPressed && actor.groundContact && !actor.baitedBy;
     actor.body.setLinvel({
@@ -423,7 +475,7 @@ class IslandSimulation {
   private launchBait(owner: Actor, aim: SimInput['aim']) {
     const hook = owner.hook;
     const target = hook.bait;
-    if (!target || !hook.body) return;
+    if (!target || !hook.body || target.ragdoll.length) return;
     if (!aim || aim.z >= FISHING_SHORE_Z) {
       this.announce(owner, '先朝海面瞄准，再点左键抛队友', 'info');
       return;
@@ -486,7 +538,9 @@ class IslandSimulation {
       hook.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
       hook.body.setTranslation({ ...position, y: ISLAND.seaY + 0.11 }, true);
       hook.phase = 'waiting';
-      hook.deadline = this.time + FISHING.biteMin + actor.random() * (FISHING.biteMax - FISHING.biteMin);
+      const nearSpot = FISHING.goodSpots.some((spot) => distance(spot, position) <= FISHING.goodSpotRadius);
+      hook.deadline = this.time + FISHING.biteMin + actor.random() * (FISHING.biteMax - FISHING.biteMin)
+        + (nearSpot ? 0 : FISHING.offSpotDelay);
     } else if (landedOnBeach || this.time > hook.deadline) {
       this.clearHook(actor);
       this.announce(actor, '空钩！瞄准岸外的海面', 'bad');
@@ -551,8 +605,8 @@ class IslandSimulation {
     body.collider(0).setEnabled(false);
     const fish: Fish = {
       id: `fish-${++this.nextEntityId}`, kind, body, state: 'swimming', hits: 0,
-      multiplier: 1, lastHit: -Infinity, lastTouch: null, wakeAt: 0, hopAt: 0,
-      caughtBy: actor.id, carrierId: null, baitPlayerId, grabAgainAt: 0,
+      multiplier: 1, lastHit: -Infinity, lastTouch: null, wakeAt: 0, hopAt: 0, escapeAt: 0,
+      caughtBy: actor.id, carrierId: null, thrownBy: null, baitPlayerId, grabAgainAt: 0,
     };
     this.fish.push(fish);
     return fish;
@@ -678,6 +732,7 @@ class IslandSimulation {
     if (teammate) {
       const point = teammate.body.translation();
       const length = Math.max(0.2, distance(position, point));
+      teammate.metrics.paddleHits += 1;
       this.startRagdoll(teammate, null, {
         x: (point.x - position.x) / length * PLAY.friendlyKnockback,
         y: 3.8,
@@ -697,10 +752,12 @@ class IslandSimulation {
     hit.hits += 1;
 
     const stunned = hit.hits >= FISH[hit.kind].hits;
+    const impulse = stunned ? PLAY.fishStunHit : PLAY.fishHit;
+    const side = this.random() < 0.5 ? -impulse.side : impulse.side;
     hit.body.setLinvel({
-      x: actor.aim.x * (stunned ? 0.6 : 1.3),
-      y: stunned ? 1.65 : 2.75,
-      z: actor.aim.z * (stunned ? 0.6 : 1.3),
+      x: actor.aim.x * impulse.forward + actor.aim.z * side,
+      y: impulse.height,
+      z: actor.aim.z * impulse.forward - actor.aim.x * side,
     }, true);
     hit.body.setAngvel({ x: 5.7, y: 3.5, z: 2.2 }, true);
     if (stunned) {
@@ -735,8 +792,9 @@ class IslandSimulation {
     if (!item) return;
 
     const previousTouch = isFish(item) ? item.lastTouch : null;
-    const victim = isFish(item) && item.carrierId ? this.actors.find(({ id }) => id === item.carrierId) : null;
-    const intercepted = isFish(item) && item.state === 'thrown' && previousTouch !== actor.id;
+    const victim = isFish(item) && item.carrierId ? this.actors.find(({ id }) => id === item.carrierId) : undefined;
+    const interceptorVictim = isFish(item) && item.state === 'thrown'
+      ? this.actors.find(({ id }) => id === item.thrownBy && id !== actor.id) : undefined;
     if (victim?.carrying === item) victim.carrying = null;
     actor.carrying = item;
     item.state = 'carried';
@@ -748,7 +806,15 @@ class IslandSimulation {
       this.announce(actor, '箱子搬起来了 · E 扔出');
       return;
     }
+    const formerOwner = victim ?? interceptorVictim ?? this.actors.find(({ id }) => id === previousTouch);
+    if (formerOwner && formerOwner !== actor) {
+      this.transferredFish.add(item.id);
+      this.affectedFish.add(item.id);
+      formerOwner.metrics.fishIncidents.add(item.id);
+      if (victim || interceptorVictim) formerOwner.metrics.fishStolen += 1;
+    }
     item.carrierId = actor.id;
+    item.thrownBy = null;
     item.grabAgainAt = this.time + PLAY.stealGrace;
     this.touchFish(item, actor);
     if (item.baitPlayerId === actor.id) {
@@ -756,9 +822,9 @@ class IslandSimulation {
     } else if (victim) {
       this.announce(actor, actor.bot ? `${actor.name}从你手里抢走了鱼！` : `从${victim.name}手里抢到鱼！`,
         actor.bot ? 'bad' : 'good', victim);
-    } else if (intercepted) {
+    } else if (interceptorVictim) {
       this.announce(actor, actor.bot ? `${actor.name}半空截走了你的鱼！` : '半空截胡！鱼到你手里了',
-        actor.bot ? 'bad' : 'good', this.actors.find(({ id }) => id === previousTouch));
+        actor.bot ? 'bad' : 'good', interceptorVictim);
     } else {
       this.announce(actor, '带到秤旁，准星对准秤按 E');
     }
@@ -779,7 +845,7 @@ class IslandSimulation {
     actor.carrying.body.setNextKinematicRotation(yawRotation(actor.yaw + Math.PI / 2));
   }
 
-  private throwCarried(actor: Actor) {
+  private throwCarried(actor: Actor, knockedLoose?: Vec3) {
     const item = actor.carrying;
     if (!item) return;
     actor.carrying = null;
@@ -789,8 +855,8 @@ class IslandSimulation {
     const towardScale = (ISLAND.scale.x - position.x) * actor.aim.x + (ISLAND.scale.z - position.z) * actor.aim.z;
     const assist = isFish(item) && scaleDistance <= ISLAND.scale.aimAssistDistance
       && (scaleDistance < 0.6 || towardScale > scaleDistance * 0.58);
-    const velocity = assist ? launchVector(origin, ISLAND.scale, 0.5)
-      : { x: actor.aim.x * 6.35, y: 4.85, z: actor.aim.z * 6.35 };
+    const velocity = knockedLoose ?? (assist ? launchVector(origin, ISLAND.scale, 0.5)
+      : { x: actor.aim.x * 6.35, y: 4.85, z: actor.aim.z * 6.35 });
     item.state = 'thrown';
     item.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
     item.body.setTranslation(origin, true);
@@ -799,6 +865,7 @@ class IslandSimulation {
     item.body.collider(0).setEnabled(true);
     if (isFish(item)) {
       item.carrierId = null;
+      item.thrownBy = actor.id;
       item.wakeAt = this.time + PLAY.stunSeconds;
       this.touchFish(item, actor);
     } else item.looseAt = this.time + 0.75;
@@ -816,34 +883,51 @@ class IslandSimulation {
       if (fish.state !== 'flopping' || this.time < fish.hopAt) continue;
       const point = fish.body.translation();
       const velocity = fish.body.linvel();
-      if (point.y > 0.48 || velocity.y > 0.25) continue;
-      const wander = (this.random() - 0.5) * 2.65;
-      fish.body.setLinvel({ x: wander, y: 3.9 + this.random() * 0.6, z: -1.58 }, true);
-      fish.body.setAngvel({ x: 4.8, y: wander * 4, z: 3.1 }, true);
-      fish.hopAt = this.time + 0.43;
+      if (!onLand(point) || point.y > 0.48 || velocity.y > 0.25) continue;
+      const hop = PLAY.fishHop;
+      const wander = (this.random() - 0.5) * hop.side;
+      fish.body.setLinvel({
+        x: wander,
+        y: hop.height[0] + this.random() * (hop.height[1] - hop.height[0]),
+        z: -(hop.seaward[0] + this.random() * (hop.seaward[1] - hop.seaward[0])),
+      }, true);
+      fish.body.setAngvel({ x: 4.8, y: wander * 3.5, z: 3.1 }, true);
+      fish.hopAt = this.time + hop.interval[0] + this.random() * (hop.interval[1] - hop.interval[0]);
     }
   }
 
   private updateOutcomes() {
     for (const fish of [...this.fish]) {
       const point = fish.body.translation();
+      if (fish.state === 'flopping' && !onLand(point)) {
+        fish.state = 'escaping';
+        fish.escapeAt = this.time + PLAY.fishEscapeSeconds;
+      }
       if (fish.state === 'thrown' && fish.lastTouch && distance(point, ISLAND.scale) <= ISLAND.scale.radius
         && Math.abs(point.y - ISLAND.scale.y) < 0.37) {
-        const amount = Math.round(FISH[fish.kind].price * fish.multiplier);
+        const baitMultiplier = fish.baitPlayerId ? FISHING.baitPriceMultiplier : 1;
+        const amount = Math.round(FISH[fish.kind].price * fish.multiplier * baitMultiplier);
         const worker = this.actors.find(({ id }) => id === fish.lastTouch);
         if (worker) {
           worker.cash += amount;
           worker.sold += 1;
           worker.shiftCash += amount;
           worker.shiftSold += 1;
-          this.announce(worker, `入账 ¥${amount} · ${FISH[fish.kind].name} ×${fish.multiplier.toFixed(2)}`, 'good');
+          const bait = fish.baitPlayerId ? ` · 活饵 ×${baitMultiplier}` : '';
+          this.announce(worker, `入账 ¥${amount} · ${FISH[fish.kind].name} ×${fish.multiplier.toFixed(2)}${bait}`, 'good');
         }
         this.removeFish(fish);
       } else if (fish.state !== 'hooked' && fish.state !== 'carried' && fish.state !== 'swimming'
-        && point.y < ISLAND.seaY - 0.15) {
+        && (point.y < ISLAND.seaY - 0.15 || (fish.state === 'escaping' && this.time >= fish.escapeAt))) {
+        this.escapedFish += 1;
+        this.affectedFish.add(fish.id);
+        const worker = this.actors.find(({ id }) => id === (fish.lastTouch ?? fish.caughtBy));
+        if (worker) {
+          worker.metrics.fishEscaped += 1;
+          worker.metrics.fishIncidents.add(fish.id);
+          this.announce(worker, '扑通！鱼溜回海里了', 'bad', undefined, 'fish_escape');
+        }
         this.removeFish(fish);
-        const worker = this.actors.find(({ id }) => id === fish.lastTouch);
-        if (worker) this.announce(worker, '扑通！鱼溜回海里了', 'bad');
       } else if (fish.state === 'thrown' && fish.body.linvel().y <= 0.25 && point.y < 0.56 && onLand(point)) {
         fish.state = 'stunned';
       }
@@ -897,7 +981,8 @@ class IslandSimulation {
   }
 
   private startRagdoll(actor: Actor, source: Vec3 | null, force?: Vec3) {
-    if (actor.carrying) this.throwCarried(actor);
+    if (actor.ragdoll.length) return;
+    actor.metrics.knockdowns += 1;
     this.clearHook(actor);
     actor.groundContact = false;
     const rawPosition = actor.body.translation();
@@ -916,6 +1001,9 @@ class IslandSimulation {
       y: 3.8,
       z: (wet ? 0 : velocity.z * 0.28) + direction.z / length * 2.9,
     };
+    if (actor.carrying) {
+      this.throwCarried(actor, { x: launch.x * 1.15, y: Math.max(3.8, launch.y), z: launch.z * 1.15 });
+    }
     actor.body.setEnabled(false);
     actor.recoverTick = this.tick + PLAY.ragdollSeconds * TICKS_PER_SECOND;
     const rotation = yawRotation(actor.yaw);

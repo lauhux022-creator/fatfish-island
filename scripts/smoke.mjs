@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
+import { createBrowserControls, createReviewPolicy } from './review-policy.mjs';
 
 const base = new URL(process.env.GAME_URL || 'http://127.0.0.1:5173/fatfish-island/');
 const screenshotDirectory = process.env.SCREENSHOT_DIR;
@@ -9,7 +10,7 @@ const expectedCommit = process.env.EXPECTED_COMMIT;
 const browser = await chromium.launch({
   channel: process.env.CHROME_PATH ? undefined : 'chrome',
   executablePath: process.env.CHROME_PATH,
-  args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+  args: process.platform === 'darwin' ? [] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 const errors = [];
@@ -42,7 +43,7 @@ async function photo(slug) {
       style: '[data-debug] { visibility: hidden !important; }',
     });
     if (frame.length < 300_000) {
-      await writeFile(join(screenshotDirectory, `m2-${slug}.jpg`), frame);
+      await writeFile(join(screenshotDirectory, `m2.5-${slug}.jpg`), frame);
       return;
     }
   }
@@ -128,41 +129,63 @@ async function walkTo(x, z) {
   await probe(() => window.fatfishDebug.snapshot().player.speed < 0.6);
 }
 
+async function driveUntil(done, timeout = 50, expectedFish) {
+  const controls = createBrowserControls(page);
+  const plan = createReviewPolicy();
+  let state = await read();
+  const deadline = state.time + timeout;
+  try {
+    while (!done(state)) {
+      if (state.time >= deadline) throw new Error('player loop did not finish');
+      if (expectedFish && !state.fish.some(({ id }) => id === expectedFish)) {
+        throw new Error(`Expected live-bait fish was lost: ${expectedFish}`);
+      }
+      await controls.apply(state, plan(state));
+      await probe((tick) => window.fatfishDebug.snapshot().tick >= tick + 5, state.tick);
+      state = await read();
+    }
+    return state;
+  } finally {
+    await controls.stop();
+  }
+}
+
 async function playerCatchAndSell() {
   await openShift();
-  await photo('01-crew');
-  await castAt(sea);
-  await probe(() => window.fatfishDebug.snapshot().hook.phase === 'bite');
-  const { targetId } = (await read()).hook;
+  const state = await read();
+  assert.equal(state.teamTarget, 1500);
+  assert.equal(await page.locator('[data-kpi] [data-team-target]').textContent(), '¥1500');
+  await photo('01-kpi');
+  const sold = await driveUntil((next) => next.sold > 0);
+  assert(sold.cash > 0);
+  console.log(`玩家钓 → 揍 → 搬 → 卖 · ¥${sold.cash}`);
+}
+
+async function fishEscapesAtShore() {
+  await openShift();
+  await walkTo(0, -0.45);
+  await walkTo(-7.2, -1.3);
+  await castAt({ x: -7.3, y: -0.5, z: -8.8 });
+  await probe(() => {
+    const hook = window.fatfishDebug.snapshot().hook;
+    return hook.phase === 'bite' && hook.target === 'fish';
+  }, null, 22000);
+  const id = (await read()).hook.targetId;
   await reel();
-
-  for (let hit = 0; hit < 4; hit++) {
-    const state = await read();
-    const fish = state.fish.find(({ id }) => id === targetId);
-    assert(fish, 'fish escaped before paddle');
-    if (fish.state === 'stunned') break;
-    if (Math.hypot(fish.position.x - state.player.position.x, fish.position.z - state.player.position.z) > 2.4) {
-      await walkTo(fish.position.x, Math.max(-3.2, fish.position.z + 1.1));
-    }
-    await aimAt({ ...fish.position, y: 0 });
-    await page.keyboard.press('KeyF');
-    await probe(() => window.fatfishDebug.snapshot().player.swing > 0);
-    await probe(() => window.fatfishDebug.snapshot().player.swing === 0);
-  }
-
-  const catchView = (await read()).fish.find(({ id }) => id === targetId);
-  assert.equal(catchView?.state, 'stunned');
-  const { position: catchPosition } = catchView;
-  const takingFrom = (await read()).player.position;
-  if (Math.hypot(catchPosition.x - takingFrom.x, catchPosition.z - takingFrom.z) > 1.8) {
-    await walkTo(catchPosition.x, Math.max(-3.2, catchPosition.z + 1));
-  }
-  await aimAt({ ...catchPosition, y: 0 });
-  await page.keyboard.press('KeyE');
-  await probe((id) => window.fatfishDebug.snapshot().player.carrying === id, targetId);
-  await sellHeld();
-  assert.equal((await read()).sold, 1);
-  console.log(`玩家钓 → 揍 → 搬 → 卖 · ¥${(await read()).cash}`);
+  const handle = await probe((id) => {
+    const next = window.fatfishDebug.snapshot();
+    if (next.fish.some((fish) => fish.id === id && fish.state === 'escaping')) return next.time;
+  }, id, 20000);
+  const crossed = await handle.jsonValue();
+  await handle.dispose();
+  await probe((id) => !window.fatfishDebug.snapshot().fish.some((fish) => fish.id === id), id, 5000);
+  const after = await read();
+  assert(after.time - crossed <= 1, 'fish lingered over one second after crossing the shoreline');
+  assert.equal(after.player.metrics.fishEscaped, 1);
+  assert.equal(after.notice.cue, 'fish_escape');
+  assert.match(await page.locator('[data-notice]').textContent(), /鱼溜回海里/);
+  await photo('02-escape');
+  console.log(`放任鱼溜回海里，越界后 ${(after.time - crossed).toFixed(2)} 秒移除`);
 }
 
 async function sellHeld() {
@@ -199,14 +222,20 @@ async function teammateBait() {
     const bait = window.fatfishDebug.snapshot().players.find((member) => member.id === id);
     return bait.ragdoll > 0 && bait.position.z < -4.12;
   }, baitId);
-  await photo('02-bait');
+
   await probe(() => window.fatfishDebug.snapshot().hook.phase === 'bite');
   const landed = await read();
   const fish = landed.fish.find(({ id }) => id === landed.hook.targetId);
   assert.equal(fish?.baitPlayerId, baitId);
   assert.notEqual(fish.kind, 'sardine');
+  assert.equal(fish.baitMultiplier, 1.8);
   await reel();
-  console.log(`钩队友 → 甩进海里 → 大型渔获 ${fish.kind} · 已记录鱼饵玩家`);
+  const landedId = fish.id;
+  const scored = await driveUntil((next) => next.sold > 0, 32, landedId);
+  assert(scored.cash > 34);
+  assert.match(scored.notice.text, /活饵/);
+  await photo('03-bait-premium');
+  console.log(`钩队友 → 甩进海里 → 活饵 ×${fish.baitMultiplier} → 入账 ¥${scored.cash}`);
 }
 
 async function friendlyFire() {
@@ -221,7 +250,7 @@ async function friendlyFire() {
   assert(down.ragdoll > 1.45 && down.ragdoll <= 2);
   if (screenshotDirectory) {
     await probe(() => window.fatfishDebug.snapshot().players.find(({ id }) => id === 'bot-2').ragdoll < 1.45);
-    await photo('03-friendly-fire');
+    await photo('04-friendly-fire');
   }
   await probe(() => window.fatfishDebug.snapshot().players.find(({ id }) => id === 'bot-2').ragdoll === 0);
   assert.equal((await read()).players.find(({ id }) => id === 'bot-2').parts.length, 0);
@@ -233,19 +262,26 @@ async function takeCrewFish(state) {
     const handle = await probe((state) => {
       const { fish, player } = window.fatfishDebug.snapshot();
       return fish.find((item) => item.state === state && item.carrierId !== player.id &&
-        item.position.y > 0.9 && Math.hypot(item.position.x - player.position.x, item.position.z - player.position.z) < 1.8);
-    }, state, 37000);
+        item.position.y > 0.85 && Math.hypot(item.position.x - player.position.x, item.position.z - player.position.z) <
+        (state === 'thrown' ? 2.22 : 1.8));
+    }, state, 48000);
     const target = await handle.jsonValue();
     await handle.dispose();
     await aimAt({ ...target.position, y: 0 });
-    const { tick } = await read();
+    const { tick, notice } = await read();
     await page.keyboard.press('KeyE');
     // Keep trying through the short pickup grace window, with separate input edges.
     await probe(({ tick, id }) => {
       const next = window.fatfishDebug.snapshot();
       return next.player.carrying === id || next.tick > tick + 6;
     }, { tick, id: target.id });
-    if ((await read()).player.carrying === target.id) return target;
+    const next = await read();
+    if (state === 'carried' && next.player.carrying === target.id) return target;
+    if (state === 'thrown' && next.notice?.id !== notice?.id && next.notice?.text.includes('半空截胡')) return target;
+    if (next.player.carrying) {
+      await aimAt({ x: next.player.position.x - 2, y: 0, z: next.player.position.z + 2 });
+      await page.keyboard.press('KeyE');
+    }
   }
   throw new Error(`Could not take a teammate's ${state} fish`);
 }
@@ -257,7 +293,6 @@ async function stealFromBot() {
   assert(victim.carrierId);
   const stolen = await read();
   assert.notEqual(stolen.players.find(({ id }) => id === victim.carrierId).carrying, victim.id);
-  await photo('04-stolen-fish');
   await sellHeld();
   assert.equal((await read()).sold, 1);
   console.log('从机器人手上抢到鱼，入秤后计给最后碰鱼的玩家');
@@ -265,37 +300,39 @@ async function stealFromBot() {
 
 async function interceptThrow() {
   await openShift();
-  await walkTo(4.9, 1.65);
+  await walkTo(4.7, 1.02);
   await takeCrewFish('thrown');
   console.log('从半空中截住一条机器人抛向秤盘的鱼');
 }
 
 async function botsAndStandings() {
-  await openShift(28);
+  await openShift(48);
   const standingsButton = page.getByRole('button', { name: '绩效榜' });
   await standingsButton.click();
   assert.equal(await page.locator('[data-standings] tbody tr').count(), 4);
   await standingsButton.click();
   assert.equal(await page.locator('[data-standings]').isVisible(), false);
-  await probe(() => window.fatfishDebug.snapshot().players.filter((worker) => worker.bot && worker.sold > 0).length === 3,
-    null, 46000);
-  await probe(() => window.fatfishDebug.snapshot().result?.day === 3, null, 55000);
+  await probe(() => window.fatfishDebug.snapshot().shiftPaused, null, 87000);
   const snapshot = await read();
   const champion = snapshot.result.ranking[0];
   const lowest = snapshot.result.ranking.at(-1);
-  assert.equal(snapshot.day, 4);
+  assert.equal(snapshot.day, 3);
   assert.equal(snapshot.result.ranking.length, 4);
-  assert(champion.bot && champion.revenue > 0 && champion.bonus === 20);
+  assert(champion.bot && champion.revenue > 0 && champion.bonus === Math.round(champion.revenue * 0.25));
   assert.equal(lowest.optimization, true);
-  assert.equal(snapshot.players.find(({ id }) => id === lowest.id).optimization, true);
-  assert.equal(await page.locator('[data-standings]').isVisible(), true);
+  assert.equal(lowest.fine, Math.round(lowest.revenue * 0.2));
+  assert.equal(await page.locator('[data-standings]:modal').isVisible(), true);
   assert.equal(await page.locator('[data-standings] tbody tr').count(), 4);
-  assert.match(await page.locator('[data-standings]').textContent(), /年终奖 \+¥20.*明日待优化/s);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal((await read()).tick, snapshot.tick);
   await photo('05-standings');
-  assert.equal(lowest.id, 'player');
-  await moveUntil('KeyS', () => window.fatfishDebug.snapshot().player.speed > 4.65);
-  assert((await read()).player.speed < 4.8, '待优化 player should remain below normal top speed');
-  console.log(`三位机器人各自完成卖鱼。第 3 天结算 · ${champion.name} 年终奖 ¥20 · ${lowest.name} 待优化`);
+  await page.keyboard.press('Enter');
+  await probe(() => !window.fatfishDebug.snapshot().shiftPaused && window.fatfishDebug.snapshot().day === 4);
+  const resumed = await read();
+  assert.equal(resumed.teamRevenue, 0);
+  assert.equal(resumed.players.find(({ id }) => id === lowest.id).optimization, true);
+  assert.equal(await page.locator('[data-standings]:modal').count(), 0);
+  console.log(`日末暂停且按 Enter 才开次日 · ${champion.name} 奖金 ¥${champion.bonus} · ${lowest.name} 待优化`);
 }
 
 try {
@@ -304,11 +341,12 @@ try {
   assert.equal(await page.evaluate(() => typeof window.fatfishDebug), 'undefined');
   await playerCatchAndSell();
   await hookSupplyCrate();
+  await fishEscapesAtShore();
   await teammateBait();
   await friendlyFire();
   await stealFromBot();
-  await interceptThrow();
   await botsAndStandings();
+  await interceptThrow();
   assert.deepEqual(errors, [], 'browser errors');
   assert.deepEqual([...remoteRequests], [], 'local mode requested an external service');
 } catch (error) {

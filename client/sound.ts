@@ -35,6 +35,11 @@ export function createSound() {
       tone(523.25, 523.25, 0.26, 0.07, 'triangle');
       tone(392, 392, 0.3, 0.07, 'triangle', 0.18);
     }
+    if (after.notice?.cue === 'fish_escape' && after.notice.id !== before.notice?.id) {
+      tone(210, 62, 0.23, 0.12, 'sine');
+      tone(310, 114, 0.11, 0.06, 'triangle', 0.08);
+      tone(160, 91, 0.13, 0.05, 'sine', 0.18);
+    }
     if (after.hook.phase !== before.hook.phase) {
       if (after.hook.phase === 'bait') {
         tone(160, 310, 0.11, 0.08, 'triangle');

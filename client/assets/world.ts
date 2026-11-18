@@ -1,5 +1,5 @@
 import * as T from 'three';
-import { ISLAND } from '../../shared/sim/config';
+import { FISHING, ISLAND } from '../../shared/sim/config';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { label, palette as p, seededDecor, type GeometryKit, type Tint } from './geometry';
 import { makeBoss } from './models';
@@ -320,11 +320,11 @@ export function makeIsland(parent: T.Scene, kit: GeometryKit) {
   const boss = makeBoss(parent, kit);
   const foam = shorelineFoam(parent);
   const bossRipples = [ring(parent, 0xbbe3b7, 0.7, -0.417, -18, 3.81, 2.16, 0.016, 0.68), ring(parent, 0xa5d5b5, 0.7, -0.419, -18, 5.21, 3.03, 0.012, 0.45)];
-  const ripples = [
-    { ring: ring(parent, 0xf6e7ae, -1.0, -0.419, -7.28, 0.53, 0.41, 0.044, 0.72), baseRadius: 0.53, phase: 1.2 },
-    { ring: ring(parent, 0xbde2bd, 1.15, -0.419, -8.2, 0.79, 0.46, 0.040, 0.62), baseRadius: 0.79, phase: 0.1 },
-    { ring: ring(parent, 0xcee7b9, 2.81, -0.419, -6.61, 0.36, 0.28, 0.048, 0.75), baseRadius: 0.36, phase: 2.3 },
-  ];
+  const ripples = FISHING.goodSpots.map(({ x, z }, index) => {
+    const surface = ISLAND.seaY + 0.10;
+    ring(parent, 0xffe8a5, x, surface, z, 0.67, 0.57, 0.068, 0.7);
+    return { ring: ring(parent, 0xffefbe, x, surface + 0.004, z, 0.78, 0.65, 0.05, 0), phase: index * 0.45 };
+  });
   mergeStatic(landscape);
 
   return (seconds: number) => {
@@ -339,9 +339,9 @@ export function makeIsland(parent: T.Scene, kit: GeometryKit) {
     });
     for (const spot of ripples) {
       const pulse = ((seconds * 0.58 + spot.phase) % 1);
-      spot.ring.scale.x = spot.baseRadius + pulse * 0.44;
-      spot.ring.scale.y = spot.baseRadius * 0.58 + pulse * 0.26;
-      spot.ring.material.opacity = (1 - pulse) * 0.76;
+      spot.ring.scale.x = 0.78 + pulse * 0.50;
+      spot.ring.scale.y = 0.65 + pulse * 0.40;
+      spot.ring.material.opacity = (1 - pulse) * 0.60;
     }
   };
 }
