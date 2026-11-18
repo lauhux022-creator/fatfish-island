@@ -10,6 +10,7 @@ import type { SimInput } from '../shared/sim/types';
 const TOKEN_PATTERN = /^[\w-]{24}$/;
 const INPUT_FLAGS = [
   'castHeld', 'castPressed', 'castReleased', 'swingPressed', 'interactPressed', 'jumpPressed', 'continuePressed', 'revivePressed',
+  'popperPressed',
 ] as const;
 const loopback = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -50,6 +51,7 @@ function parseInput(value: unknown): SimInput | null {
     jumpPressed: value.jumpPressed === true,
     continuePressed: value.continuePressed === true,
     revivePressed: value.revivePressed === true,
+    popperPressed: value.popperPressed === true,
     build: value.build as BuildKind | undefined,
     buy,
   };

@@ -3,6 +3,7 @@ import { crewReaction } from '../shared/fish-brain/reactions';
 import { bossBust, crewBust, updatePortrait } from './assets/portraits';
 import { BUILD_KINDS, type CampaignCycleResult, type WarehouseView } from '../shared/sim/campaign-types';
 import { CAMPAIGN, ISLAND, PLAY, SHIFT } from '../shared/sim/config';
+import { POPPER } from '../shared/sim/popper';
 import { SHOP, SHOP_ITEM_IDS } from '../shared/sim/shop';
 import type { FishView, ShiftEntry, SimSnapshot } from '../shared/sim/types';
 import { crewColor } from './crew-colors';
@@ -37,6 +38,11 @@ const stunFish: Guide = {
   desktop: '追着鱼瞄准，连按 F 挥桨，直到鱼晕过去。',
   touch: '点鱼瞄准，连按「挥桨」。鱼弹远了就追上去。',
 };
+
+function showPopper({ player, campaign, shiftPaused }: SimSnapshot) {
+  return Boolean(player.equipment?.popper) && campaign.phase === 'day' && !shiftPaused
+    && !player.ghost && !player.ragdoll && !player.baitedBy;
+}
 
 function fishingGuide(snapshot: SimSnapshot): Guide | undefined {
   const { hook } = snapshot;
@@ -134,7 +140,8 @@ function guideFor(snapshot: SimSnapshot): Guide {
       };
     }
     return {
-      title: heldFish.baitMultiplier > 1 ? `活饵溢价 ×${heldFish.baitMultiplier}，快上秤` : '把鱼扔进橙色秤盘',
+      title: heldFish.airCatchMultiplier > 1 ? `空接到手 ×${heldFish.airCatchMultiplier}，快上秤`
+        : heldFish.baitMultiplier > 1 ? `活饵溢价 ×${heldFish.baitMultiplier}，快上秤` : '把鱼扔进橙色秤盘',
       desktop: '走到秤前，朝秤盘按 E 抛鱼。',
       touch: '走到秤前，轻点秤盘瞄准，再按「搬／扔」。',
     };
@@ -148,12 +155,38 @@ function guideFor(snapshot: SimSnapshot): Guide {
     };
   }
 
+  const popper = snapshot.poppers?.find(item => item.ownerId === player.id && item.phase === 'fuse');
+  if (popper) {
+    return {
+      title: `弹鱼桶还有 ${popper.remaining.toFixed(1)} 秒`,
+      desktop: '离开地面圈。鱼弹起来后，靠近按 E 接。',
+      touch: '离开地面圈。鱼弹起来后，靠近点「搬／扔」。',
+      meter: popper.remaining / POPPER.fuseSeconds,
+    };
+  }
+
   const fishing = fishingGuide(snapshot);
   if (fishing) return fishing;
 
   const distanceTo = (item: FishView) =>
     Math.hypot(item.position.x - player.position.x, item.position.z - player.position.z);
   const nearby = (item: FishView) => distanceTo(item) < 4.5 && item.position.z >= ISLAND.shoreZ - 0.6;
+  if (fish.some(item => item.popCatchUntil != null && item.popCatchUntil > snapshot.time
+    && item.position.y >= POPPER.catchHeight && nearby(item))) {
+    return {
+      title: `趁鱼在空中接住 · ×${POPPER.airCatchMultiplier}`,
+      desktop: '追着带绿光的鱼，靠近后按 E 接。',
+      touch: '追着带绿光的鱼，靠近点「搬／扔」。',
+    };
+  }
+  if (showPopper(snapshot) && !player.popperCooldown
+      && fish.some(item => !item.heavy && (item.state === 'flopping' || item.state === 'stunned') && nearby(item))) {
+    return {
+      title: '弹鱼桶能把鱼弹起来',
+      desktop: '瞄准鱼旁的地面按 G，再靠近按 E 接。',
+      touch: '点鱼旁的地面，再点「弹鱼桶」。',
+    };
+  }
   const nearbyCargo = fish.find(item => item.heavy && (item.state === 'stunned' || item.state === 'thrown') && nearby(item));
   if (nearbyCargo) {
     return {
@@ -341,6 +374,7 @@ const markup = `
       <span><kbd>左键</kbd> 抛竿／收线</span>
       <span><kbd>F</kbd> 挥桨</span>
       <span><kbd>E</kbd> 搬／抢／扔</span>
+      <span data-popper-key hidden><kbd>G</kbd> 弹鱼桶</span>
       <span><kbd>空格</kbd> 跳</span>
     </div>
     <button class="boss-chat-toggle gear-shop-toggle" type="button" aria-controls="gear-shop" aria-expanded="false" data-shop-toggle hidden>
@@ -358,6 +392,7 @@ const markup = `
           <li><b>钓鱼</b> 移动鼠标瞄准。左键长按抛竿，咬钩后连点左键收线。</li>
           <li><b>拍晕</b> WASD 追上鱼，瞄准后按 F 或右键挥桨，空格跳起还能接一桨。</li>
           <li><b>交鱼</b> 靠近晕鱼按 E 抬起，朝橙色秤盘按 E 扔进去。</li>
+          <li><b>弹鱼桶</b> 到渔具摊买一桶，瞄准鱼旁的地面按 G，在鱼落地前按 E 接。</li>
           <li><b>大鱼</b> 巨型活饵鱼得两人各按一次 E 抓住两端，抬到秤前再扔。</li>
           <li><b>截胡</b> 靠近别人手里的鱼或半空中的鱼，朝鱼按 E 抢。</li>
           <li><b>队友饵</b> 朝队友甩钩，再瞄准海面点左键。活饵渔获售价更高，饵员拿不到绩效。</li>
@@ -366,6 +401,7 @@ const markup = `
           <li><b>钓鱼</b> 点海面瞄准。长按抛竿，咬钩后连点收线。</li>
           <li><b>拍晕</b> 用方向键追上鱼，点鱼瞄准，按「挥桨」。</li>
           <li><b>交鱼</b> 靠近晕鱼按「搬／扔」，朝橙色秤盘再按一下。</li>
+          <li><b>弹鱼桶</b> 买到后点地面，再点「弹鱼桶」。趁鱼没落地，点「搬／扔」接住。</li>
           <li><b>大鱼</b> 两人分别点「搬／扔」抓住巨型活饵鱼，抬到秤前再扔。</li>
           <li><b>截胡</b> 靠近并瞄准别人手里或半空中的鱼，点「搬／扔」抢。</li>
           <li><b>队友饵</b> 点队友瞄准并甩钩，再点海面按「投／收」。活饵渔获售价更高，饵员拿不到绩效。</li>
@@ -385,6 +421,7 @@ const markup = `
     <div class="touch-actions">
       <button type="button" data-control="cast">投／收</button>
       <button type="button" data-control="swing">挥桨</button>
+      <button type="button" data-control="popper" hidden>弹鱼桶</button>
       <button type="button" data-control="interact">搬／扔</button>
       <button type="button" data-control="jump">跳</button>
     </div>
@@ -486,6 +523,8 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   const wood = ui('[data-wood]');
   const revivePanel = ui<HTMLElement>('[data-revive-panel]');
   const touchSwing = ui('[data-control="swing"]');
+  const touchPopper = ui<HTMLButtonElement>('[data-control="popper"]');
+  const popperKey = ui<HTMLElement>('[data-popper-key]');
   const reviveProgress = ui('[data-revive-progress]');
   const crabHud = ui<HTMLElement>('[data-crab-hud]');
   const crabHealth = ui('[data-crab-health]');
@@ -616,6 +655,7 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
       if (reaction) writeText(reactionText, `${speaker.name}：${reaction}`);
     }
     bossBubble.hidden = !line || shiftPaused || performance.now() >= speakUntil;
+    if (bossBubble.hidden && notice.style.left) notice.style.left = '';
     if (shiftPaused && !bossForm.hidden) setChatOpen(false);
     const meeting = shiftPaused && boss.interview?.day === snapshot.day ? boss.interview : null;
     const meetingPending = shiftPaused && boss.pending;
@@ -653,19 +693,36 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
     const x = Math.max(gutter, Math.min(root.clientWidth - gutter, point.x));
     let y = Math.max(height + 12, point.y);
     let docked = false;
-    if (root.clientWidth <= 600) {
-      const left = x - width / 2;
-      const right = x + width / 2;
-      for (const area of bossObstacles) {
-        if (area.hidden) continue;
-        const rect = area.getBoundingClientRect();
-        if (left >= rect.right + 6 || right <= rect.left - 6 || y <= rect.top - 6 || y - height >= rect.bottom + 8) continue;
-        y = rect.bottom + height + 8;
-        docked = true;
+    const left = x - width / 2;
+    const right = x + width / 2;
+    const narrow = root.clientWidth <= 600;
+    let noticeX = '';
+    if (!narrow && !notice.hidden) {
+      const rect = notice.getBoundingClientRect();
+      const middle = root.clientWidth / 2;
+      const half = rect.width / 2;
+      if (left < middle + half + 6 && right > middle - half - 6 && y > rect.top - 6 && y - height < rect.bottom + 8) {
+        const header = headerColumns.map(area => area.getBoundingClientRect())
+          .filter(area => area.top < rect.bottom + 6 && area.bottom > rect.top - 6);
+        const choices = [left - half - 10, right + half + 10]
+          .filter(center => center > half + 8 && center < root.clientWidth - half - 8
+            && header.every(area => center + half + 6 <= area.left || center - half - 6 >= area.right))
+          .sort((a, b) => Math.abs(a - middle) - Math.abs(b - middle));
+        if (choices.length) noticeX = `${Math.round(choices[0])}px`;
       }
+    }
+    if (notice.style.left !== noticeX) notice.style.left = noticeX;
+    for (const area of bossObstacles) {
+      if (area.hidden || (!narrow && area !== notice)) continue;
+      const rect = area.getBoundingClientRect();
+      if (left >= rect.right + 6 || right <= rect.left - 6 || y <= rect.top - 6 || y - height >= rect.bottom + 8) continue;
+      y = rect.bottom + height + 8;
+      docked = true;
     }
     const tail = Math.max(14, Math.min(width - 14, point.x - x + width / 2));
     if (bossBubble.dataset.docked !== String(docked)) bossBubble.dataset.docked = String(docked);
+    const tailUp = String(docked && point.y < y - height / 2);
+    if (bossBubble.dataset.tailUp !== tailUp) bossBubble.dataset.tailUp = tailUp;
     bossBubble.style.setProperty('--boss-x', `${Math.round(x)}px`);
     bossBubble.style.setProperty('--boss-y', `${Math.round(y)}px`);
     bossBubble.style.setProperty('--boss-tail', `${Math.round(tail)}px`);
@@ -795,7 +852,10 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
       button.disabled = !player.shopOpen || owned || !affordable;
       button.dataset.owned = String(owned);
       state.hidden = !owned && (!player.shopOpen || affordable);
-      if (!state.hidden) writeText(state, owned ? (id === 'bait' ? '鱼饵待用' : '已装备') : '鱼款不足');
+      if (!state.hidden) {
+        const status = id === 'bait' ? '鱼饵待用' : id === 'popper' ? '桶已备好' : '已装备';
+        writeText(state, owned ? status : '鱼款不足');
+      }
     }
   }
 
@@ -812,6 +872,12 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
     writeText(cycleTotal, `¥${cycle.secured} / ¥${cycle.target}`);
     writeText(warehouse, `${stock} 尾${lostFish ? ` · 被抢 ${lostFish} 尾（¥${lostValue}）` : ''}`);
     const observing = root.dataset.roomMode === 'spectating' || root.dataset.roomMode === 'reconnecting';
+    const hasPopper = !observing && showPopper(snapshot);
+    const nextPopper = Math.ceil(player.popperCooldown || 0);
+    touchPopper.hidden = popperKey.hidden = !hasPopper;
+    touchPopper.disabled = nextPopper > 0 || campaign.remaining <= POPPER.fuseSeconds;
+    writeText(touchPopper, nextPopper ? `${nextPopper} 秒后` : '弹鱼桶');
+    popperKey.dataset.cooling = String(touchPopper.disabled);
     const building = (phase === 'night' || phase === 'boss') && !player.ghost;
     const reviving = player.ghost ? player : players.filter(({ ghost }) => ghost).sort((a, b) =>
       Math.hypot(a.position.x - player.position.x, a.position.z - player.position.z)

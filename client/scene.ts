@@ -1,6 +1,7 @@
 import * as T from 'three';
 import { BUILD_KINDS, type CampaignView } from '../shared/sim/campaign-types';
 import { CAMPAIGN, FISHING, ISLAND, PLAY } from '../shared/sim/config';
+import { POPPER, popperTarget } from '../shared/sim/popper';
 import { buildAhead, buildSiteAvailable, snapBuildSite } from '../shared/sim/construction';
 import { weaponStats } from '../shared/sim/shop';
 import type { FishState, PlayerView, Pose, SimSnapshot, Vec3 } from '../shared/sim/types';
@@ -10,6 +11,7 @@ import { crewBadge } from './assets/crew-badge';
 import { makeGeometryKit } from './assets/geometry';
 import { makeLiftMarkers } from './assets/lift-markers';
 import { createModels } from './assets/models';
+import { makeAirCatchMark, makePopperArt } from './assets/poppers';
 import { makeIsland } from './assets/world';
 import { crewColor } from './crew-colors';
 
@@ -93,12 +95,14 @@ export function createScene(canvas: HTMLCanvasElement) {
   const models = createModels(kit);
   const island = makeIsland(world, kit, appearances);
   const campaignArt = makeCampaignArt(world, kit, appearances);
+  const popperArt = makePopperArt(world, kit);
   const speechPoint = new T.Vector3();
   const workers = new Map<string, ReturnType<typeof createWorker>>();
   const fish = new Map<string, ReturnType<typeof models.fish> & {
     state: FishState;
     carrierId: string | null;
     lift: ReturnType<typeof makeLiftMarkers> | null;
+    airCatch?: ReturnType<typeof makeAirCatchMark>;
   }>();
   const crates = new Map<string, ReturnType<typeof models.crate>>();
   const scalePosition = new T.Vector3(ISLAND.scale.x, ISLAND.groundY + 0.56, ISLAND.scale.z);
@@ -133,6 +137,12 @@ export function createScene(canvas: HTMLCanvasElement) {
   );
   buildMarker.rotation.x = -Math.PI / 2;
   world.add(buildMarker);
+  const popperMarker = new T.Mesh(
+    new T.RingGeometry(0.24, 0.32, 6),
+    new T.MeshBasicMaterial({ color: 0x74dbaa, transparent: true, opacity: 0.83, depthWrite: false, toneMapped: false }),
+  );
+  popperMarker.rotation.x = -Math.PI / 2;
+  world.add(popperMarker);
 
   const shockArcGeometries = [0.09, 0.14, 0.2].map((arcWidth, index) => {
     const start = -0.66 + index * 0.05;
@@ -456,6 +466,10 @@ export function createScene(canvas: HTMLCanvasElement) {
         model.animal.rotateY(Math.PI / 2);
       }
       model.lift?.animate(item, snapshot.players, model.animal.position, seconds, findHand);
+      const airCatch = item.popCatchUntil != null && item.popCatchUntil > snapshot.time
+        && item.position.y >= POPPER.catchHeight;
+      if (airCatch) model.airCatch ??= makeAirCatchMark(world, kit);
+      model.airCatch?.animate(airCatch, item.position, seconds);
       const swimming = item.state === 'swimming';
       const energetic = item.state === 'flopping' || item.state === 'hooked';
       const speed = energetic ? 27 : 12;
@@ -473,6 +487,7 @@ export function createScene(canvas: HTMLCanvasElement) {
     for (const [id, value] of fish) {
       if (updated.has(id)) continue;
       value.lift?.dispose();
+      value.airCatch?.dispose();
       value.animal.removeFromParent();
       fish.delete(id);
     }
@@ -543,6 +558,16 @@ export function createScene(canvas: HTMLCanvasElement) {
     const spaceAvailable = buildSiteAvailable(site, campaign.structures, campaign.enemies);
     buildMarker.position.set(site.x, (isWater(site.x, site.z) ? ISLAND.seaY : site.y) + 0.08, site.z);
     buildMarker.material.color.setHex(woodAvailable && spaceAvailable ? 0xf7c66e : 0xff715e);
+  }
+
+  function animatePopperMarker(snapshot: SimSnapshot, selfId: string | null) {
+    const { player, campaign, shiftPaused } = snapshot;
+    const canPlace = selfId && aimPoint && player.equipment?.popper && !player.popperCooldown && !shiftPaused
+      && campaign.phase === 'day' && campaign.remaining > POPPER.fuseSeconds
+      && !player.ghost && !player.ragdoll && !player.baitedBy;
+    const point = canPlace ? popperTarget(player.position, aimPoint) : null;
+    popperMarker.visible = point !== null;
+    if (point) popperMarker.position.set(point.x, point.y + 0.092, point.z);
   }
 
   function animateHook(view: PlayerView, worker: ReturnType<typeof createWorker>, seconds: number) {
@@ -622,6 +647,7 @@ export function createScene(canvas: HTMLCanvasElement) {
     frameCamera(snapshot, delta, campaign);
     island.animate(elapsed, animationDelta, snapshot.boss.line?.emotion ?? 'calm', bossSpeaking, night);
     campaignArt.animate(campaign, elapsed, night, camera);
+    popperArt.animate(snapshot.poppers ?? [], elapsed);
     const { bossModel } = island;
     const { crabModel } = campaignArt;
     if (canvas.dataset.bossModel !== bossModel) canvas.dataset.bossModel = bossModel;
@@ -631,6 +657,7 @@ export function createScene(canvas: HTMLCanvasElement) {
     animateCrosshair(snapshot);
     animateCatchHelp(snapshot, elapsed, selfId);
     animateBuildMarker(snapshot, selfId);
+    animatePopperMarker(snapshot, selfId);
     animateEffects(snapshot, elapsed);
     renderer.render(world, camera);
   }
@@ -639,6 +666,7 @@ export function createScene(canvas: HTMLCanvasElement) {
     for (const { actor } of workers.values()) actor.dispose();
     island.dispose();
     campaignArt.dispose();
+    popperArt.dispose();
     appearances.dispose();
     const geometries = new Set<T.BufferGeometry>();
     const materials = new Set<T.Material>();

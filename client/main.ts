@@ -130,6 +130,7 @@ async function startGame() {
     input.continuePressed = false;
     input.build = undefined;
     input.revivePressed = false;
+    input.popperPressed = false;
     input.buy = undefined;
   }
 
@@ -187,7 +188,7 @@ async function startGame() {
     }
     if (target instanceof HTMLElement && target.closest('button, summary') && event.code === 'Space') return;
     if (!['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-      'Space', 'KeyF', 'KeyE'].includes(event.code)) return;
+      'Space', 'KeyF', 'KeyE', 'KeyG'].includes(event.code)) return;
     event.preventDefault();
     sound.unlock();
     pressed.add(event.code);
@@ -195,6 +196,7 @@ async function startGame() {
     if (event.code === 'Space') input.jumpPressed = true;
     if (event.code === 'KeyF') input.swingPressed = true;
     if (event.code === 'KeyE') input.interactPressed = true;
+    if (event.code === 'KeyG') input.popperPressed = true;
   }, options);
 
   addEventListener('keyup', (event) => pressed.delete(event.code), options);
@@ -211,6 +213,7 @@ async function startGame() {
     input.swingPressed = false;
     input.interactPressed = false;
     input.jumpPressed = false;
+    input.popperPressed = false;
   }, options);
   function resizeComposer() {
     const viewport = window.visualViewport;
@@ -276,6 +279,7 @@ async function startGame() {
     if (control === 'cast') setCast(true);
     if (control === 'swing') input.swingPressed = true;
     if (control === 'interact') input.interactPressed = true;
+    if (control === 'popper') input.popperPressed = true;
     if (control === 'jump') input.jumpPressed = true;
     const build = buildControls.get(control);
     if (build) input.build = build;
@@ -352,6 +356,7 @@ async function startGame() {
       input.continuePressed = false;
       input.build = undefined;
       input.revivePressed = false;
+      input.popperPressed = false;
       input.buy = undefined;
       accumulated = pauseChanged ? 0 : accumulated - stepMs;
     }

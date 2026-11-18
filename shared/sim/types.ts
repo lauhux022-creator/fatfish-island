@@ -1,6 +1,7 @@
 import type { FishBrainOutput, FishTrigger } from '../fish-brain/types';
 import type { BuildKind, CampaignView } from './campaign-types';
 import type { WorkerAnimation, WorkerRoleId } from './cast';
+import type { PopperView } from './popper';
 import type { ShopEquipment, ShopItemId } from './shop';
 
 export interface Vec3 {
@@ -42,6 +43,7 @@ export interface SimInput {
   jumpPressed: boolean;
   build?: BuildKind;
   buy?: ShopItemId;
+  popperPressed?: boolean;
   revivePressed?: boolean;
   continuePressed?: boolean;
   chat?: string;
@@ -56,6 +58,7 @@ export interface RagdollPart extends Pose {
 export interface PlayerMetrics {
   interference: number;
   paddleHits: number;
+  popperHits: number;
   fishStolen: number;
   knockdowns: number;
   fishEscaped: number;
@@ -79,6 +82,7 @@ export interface PlayerView extends Pose {
   cash: number;
   equipment: ShopEquipment;
   shopOpen: boolean;
+  popperCooldown: number;
   sold: number;
   shiftCash: number;
   shiftSold: number;
@@ -126,6 +130,8 @@ export interface FishView extends Pose {
   state: FishState;
   multiplier: number;
   baitMultiplier: number;
+  airCatchMultiplier: number;
+  popCatchUntil: number | null;
   caughtBy: string;
   lastTouch: string | null;
   stealReady: boolean;
@@ -145,7 +151,7 @@ export interface SimNotice {
   id: number;
   text: string;
   tone: 'info' | 'good' | 'bad';
-  cue?: 'fish_escape' | 'fish_hit' | 'water_fall';
+  cue?: 'fish_escape' | 'fish_hit' | 'water_fall' | 'air_catch';
 }
 
 export interface ShiftEntry {
@@ -201,6 +207,7 @@ export interface SimSnapshot {
   boss: BossView;
   hook: HookView;
   fish: FishView[];
+  poppers: PopperView[];
   crates: CrateView[];
   cash: number;
   sold: number;

@@ -151,19 +151,24 @@ function snapshotShape(value: unknown): value is SimSnapshot {
   if (!record(value) || !numbers(value, ['tick', 'day', 'time', 'shiftRemaining', 'teamRevenue', 'teamTarget'])
     || !record(value.notices) || !record(value.boss) || !numbers(value.boss, ['cooldownSeconds', 'priceMultiplier'])
     || !record(value.metrics) || !Array.isArray(value.players) || value.players.length !== 4
-    || !Array.isArray(value.fish) || !Array.isArray(value.crates) || !campaignShape(value.campaign)) return false;
+    || !Array.isArray(value.fish) || !Array.isArray(value.crates) || !campaignShape(value.campaign)
+    || !Array.isArray(value.poppers) || !value.poppers.every((item) => record(item)
+      && typeof item.id === 'string' && typeof item.ownerId === 'string' && vector(item.position)
+      && (item.phase === 'fuse' || item.phase === 'burst') && numbers(item, ['remaining', 'radius']))) return false;
   if (value.result !== null && (!record(value.result) || !Array.isArray(value.result.ranking)
     || !value.result.ranking.every((entry) => record(entry) && isWorkerRoleId(entry.roleId)))) return false;
   return value.players.every((player: unknown) =>
     pose(player) && typeof player.id === 'string' && typeof player.name === 'string' && typeof player.bot === 'boolean'
     && isWorkerRoleId(player.roleId) && isWorkerAnimation(player.animation) && typeof player.ghost === 'boolean'
     && typeof player.shopOpen === 'boolean' && record(player.equipment)
-    && typeof player.equipment.rod === 'boolean' && typeof player.equipment.pan === 'boolean' && typeof player.equipment.bait === 'boolean'
-    && numbers(player, ['yaw', 'speed', 'ragdoll', 'cash', 'sold', 'shiftCash', 'shiftSold', 'favor', 'revivePaid'])
+    && typeof player.equipment.rod === 'boolean' && typeof player.equipment.pan === 'boolean'
+    && typeof player.equipment.bait === 'boolean' && typeof player.equipment.popper === 'boolean'
+    && numbers(player, ['yaw', 'speed', 'ragdoll', 'cash', 'sold', 'shiftCash', 'shiftSold', 'favor', 'revivePaid', 'popperCooldown'])
     && vector(player.velocity) && record(player.metrics) && Array.isArray(player.parts) && player.parts.every(pose)
     && record(player.hook) && numbers(player.hook, ['charge', 'progress'])
     && (player.hook.position === null || vector(player.hook.position)))
-    && value.fish.every(pose) && value.crates.every(pose);
+    && value.fish.every((fish) => pose(fish) && numbers(fish, ['airCatchMultiplier'])
+      && (fish.popCatchUntil === null || numbers(fish, ['popCatchUntil']))) && value.crates.every(pose);
 }
 
 function parseMessage(raw: unknown): RoomServerMessage | null {

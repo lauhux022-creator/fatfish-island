@@ -86,7 +86,7 @@ test('ignoring the stall preserves the reviewed basic equipment and shift number
   assert.equal(state.player.metrics.interference, 6);
   assert.equal(state.metrics.fishIncidents, 17);
   assert.equal(state.teamRevenue, 2106);
-  assert.deepEqual(state.player.equipment, { rod: false, pan: false, bait: false });
+  assert.deepEqual(state.player.equipment, { rod: false, pan: false, bait: false, popper: false });
 });
 
 test('a short cast aimed at water tells players to charge, and a land aim gets a direction hint', async (t) => {

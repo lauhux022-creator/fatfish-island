@@ -3,6 +3,7 @@ import coin from '../assets/dafeiyu/sfx/coin.wav?url';
 import hit1 from '../assets/dafeiyu/sfx/hit1.wav?url';
 import hit2 from '../assets/dafeiyu/sfx/hit2.wav?url';
 import hit3 from '../assets/dafeiyu/sfx/hit3.wav?url';
+import pop from '../assets/dafeiyu/sfx/pop.wav?url';
 import splash from '../assets/dafeiyu/sfx/splash.wav?url';
 import thud from '../assets/dafeiyu/sfx/thud.wav?url';
 import whoosh1 from '../assets/dafeiyu/sfx/whoosh1.wav?url';
@@ -12,7 +13,7 @@ import type { SimSnapshot } from '../shared/sim/types';
 
 const hitClips = [hit1, hit2, hit3];
 const swingClips = [whoosh1, whoosh2];
-const clips = [coin, cheer, win, splash, thud, ...hitClips, ...swingClips];
+const clips = [coin, cheer, win, splash, thud, pop, ...hitClips, ...swingClips];
 
 export function createSound() {
   const samples = new Map<string, AudioBuffer>();
@@ -76,6 +77,18 @@ export function createSound() {
 
   function update(before: SimSnapshot, after: SimSnapshot) {
     const cue = after.notice?.id !== before.notice?.id ? after.notice?.cue : undefined;
+    if (after.poppers?.some(({ id, phase }) => phase === 'burst'
+      && !before.poppers?.some(prior => prior.id === id && prior.phase === 'burst'))) {
+      effect(pop, 0.34, () => {
+        tone(235, 96, 0.16, 0.12, 'triangle');
+        tone(460, 820, 0.18, 0.09, 'sine', 0.05);
+      });
+    }
+    if (after.fish.some(fish => fish.carrierId === after.player.id && fish.airCatchMultiplier > 1
+      && before.fish.some(old => old.id === fish.id && old.airCatchMultiplier === 1))) {
+      tone(480, 760, 0.13, 0.09, 'triangle');
+      tone(800, 1220, 0.16, 0.07, 'sine', 0.09);
+    }
     if (after.sold > before.sold) {
       effect(coin, 0.38, () => {
         tone(659.25, 659.25, 0.2, 0.09, 'triangle');

@@ -11,6 +11,7 @@ import { BOSS, CAMPAIGN, CREW, FISH, FISHING, ISLAND, PLAY, SHIFT, STEP_SECONDS,
 import { buildAhead } from './construction';
 import { Defense } from './defense';
 import { CAMPAIGN_PACES, isCampaignPace, type CampaignPace } from './pace';
+import { POPPER, popperTarget, type PopperView } from './popper';
 import { resolveMovement, yawRotation } from './prediction';
 import { seededRandom } from './random';
 import { castChargeSeconds, isShopItemId, SHOP, weaponStats, type ShopEquipment, type ShopItemId } from './shop';
@@ -48,6 +49,16 @@ interface Fish {
   wakeAt: number;
   hopAt: number;
   escapeAt: number;
+  popFlightUntil: number | null;
+  airCaught: boolean;
+}
+
+interface Popper {
+  id: string;
+  owner: Actor;
+  position: Vec3;
+  burstTick: number;
+  endTick: number;
 }
 
 interface Crate {
@@ -87,7 +98,7 @@ interface Direction {
 type ActorMetrics = Omit<PlayerMetrics, 'interference' | 'fishIncidents'> & { fishIncidents: Set<string> };
 
 function newActorMetrics(): ActorMetrics {
-  return { paddleHits: 0, fishStolen: 0, knockdowns: 0, fishEscaped: 0, fishIncidents: new Set() };
+  return { paddleHits: 0, popperHits: 0, fishStolen: 0, knockdowns: 0, fishEscaped: 0, fishIncidents: new Set() };
 }
 
 interface Actor {
@@ -107,6 +118,8 @@ interface Actor {
   ragdoll: RagdollBody[];
   recoverTick: number;
   nextTripAt: number;
+  nextPopperAt: number;
+  nextPopperHitAt: number;
   carrying: Fish | Crate | null;
   lifting: Fish | null;
   hook: Hook;
@@ -195,6 +208,7 @@ class IslandSimulation {
   private readonly actors: Actor[];
   private readonly crates: Crate[];
   private readonly fish: Fish[] = [];
+  private poppers: Popper[] = [];
   private readonly transferredFish = new Set<string>();
   private readonly affectedFish = new Set<string>();
   private escapedFish = 0;
@@ -323,9 +337,11 @@ class IslandSimulation {
       if (actorInput.interactPressed) this.interact(actor);
       if (actorInput.build) this.build(actor, actorInput.build);
       if (actorInput.buy) this.buy(actor, actorInput.buy);
+      if (actorInput.popperPressed) this.armPopper(actor, actorInput.aim);
       if (actorInput.revivePressed) this.payRevive(actor);
     }
 
+    this.updatePoppers();
     for (const actor of this.actors) {
       this.updateWaitingHook(actor);
       this.updateCarried(actor);
@@ -373,7 +389,8 @@ class IslandSimulation {
         memory: player.memory,
         priceMultiplier: this.salePricePercent / 100,
       },
-      fish: this.fish.map(({ id, body, kind, state, cargo, multiplier, caughtBy, carrierId, baitPlayerId, lastTouch, grabAgainAt }) =>
+      fish: this.fish.map(({ id, body, kind, state, cargo, multiplier, caughtBy, carrierId, baitPlayerId, lastTouch,
+        grabAgainAt, popFlightUntil, airCaught }) =>
         ({
           id, kind, state, multiplier, caughtBy, carrierId, baitPlayerId, lastTouch, ...pose(body),
           heavy: cargo !== null,
@@ -381,8 +398,11 @@ class IslandSimulation {
           liftClaimId: cargo?.claim?.worker.id ?? null,
           liftClaimAt: cargo?.claim?.at ?? null,
           baitMultiplier: baitPlayerId ? FISHING.baitPriceMultiplier : 1,
+          airCatchMultiplier: airCaught ? POPPER.airCatchMultiplier : 1,
+          popCatchUntil: !airCaught && popFlightUntil !== null && popFlightUntil > this.time ? popFlightUntil : null,
           stealReady: !cargo && (state === 'thrown' || (state === 'carried' && this.time >= grabAgainAt)),
         })),
+      poppers: this.poppers.map((popper) => this.viewPopper(popper)),
       crates: this.crates.map(({ id, body, state }) => ({ id, state, ...pose(body) })),
       cash: player.cash,
       sold: player.sold,
@@ -614,7 +634,8 @@ class IslandSimulation {
     if (!isShopItemId(id) || !this.canShop(actor, actor.body.translation())) return;
     const item = SHOP.items[id];
     if (actor.equipment[id]) {
-      this.announce(actor, id === 'bait' ? '鱼饵盒里还有一份' : `已经买过${item.name}`);
+      const message = id === 'bait' ? '鱼饵盒里还有一份' : id === 'popper' ? '袋里还有一只弹鱼桶' : `已经买过${item.name}`;
+      this.announce(actor, message);
       return;
     }
     if (actor.cash < item.price) {
@@ -626,6 +647,84 @@ class IslandSimulation {
     this.announce(actor, `买到${item.name} · 花了 ¥${item.price}`, 'good');
   }
 
+  private armPopper(actor: Actor, aim: SimInput['aim']) {
+    if (!actor.equipment.popper) return;
+    const burstTick = this.tick + Math.round(POPPER.fuseSeconds * TICKS_PER_SECOND);
+    if (this.phase !== 'day' || burstTick >= this.shiftEnd) {
+      this.announce(actor, '天要黑了，弹鱼桶留到白班', 'bad');
+      return;
+    }
+    if (this.time < actor.nextPopperAt) {
+      this.announce(actor, '等一等，弹鱼桶还在冷却', 'bad');
+      return;
+    }
+    const position = popperTarget(actor.body.translation(), aim);
+    if (!position) {
+      this.announce(actor, '对准五米内的干地再用弹鱼桶', 'bad');
+      return;
+    }
+    actor.equipment.popper = false;
+    actor.nextPopperAt = this.time + POPPER.cooldownSeconds;
+    this.poppers.push({
+      id: `popper-${++this.nextEntityId}`, owner: actor, position, burstTick,
+      endTick: burstTick + Math.round(POPPER.burstSeconds * TICKS_PER_SECOND),
+    });
+    this.announce(actor, '弹鱼桶要开盖了！闪开再接鱼');
+  }
+
+  private viewPopper(popper: Popper): PopperView {
+    const fuse = this.tick < popper.burstTick;
+    return {
+      id: popper.id, ownerId: popper.owner.id, position: { ...popper.position },
+      phase: fuse ? 'fuse' : 'burst', radius: POPPER.radius,
+      remaining: ((fuse ? popper.burstTick : popper.endTick) - this.tick) * STEP_SECONDS,
+    };
+  }
+
+  private updatePoppers() {
+    if (!this.poppers.length) return;
+    for (const popper of this.poppers) {
+      if (popper.burstTick === this.tick) this.burstPopper(popper);
+    }
+    this.poppers = this.poppers.filter(({ endTick }) => this.tick < endTick);
+  }
+
+  private burstPopper({ position, owner }: Popper) {
+    let launched = 0;
+    for (const fish of this.fish) {
+      if (fish.cargo || (fish.state !== 'stunned' && fish.state !== 'flopping')) continue;
+      const point = fish.body.translation();
+      const radius = distance(point, position);
+      if (radius > POPPER.radius || point.y > POPPER.looseFishHeight || !onLand(point)) continue;
+      const drift = POPPER.fishDrift / Math.max(0.5, radius);
+      const targetX = clamp(point.x + (point.x - position.x) * drift, ISLAND.minX + POPPER.landInset, ISLAND.maxX - POPPER.landInset);
+      const targetZ = clamp(point.z + (point.z - position.z) * drift, ISLAND.shoreZ + POPPER.landInset, ISLAND.backZ - POPPER.landInset);
+      fish.state = 'thrown';
+      fish.thrownBy = null;
+      fish.popFlightUntil = this.time + POPPER.catchSeconds;
+      fish.wakeAt = this.time + PLAY.stunSeconds;
+      fish.body.setLinvel({ x: (targetX - point.x) / POPPER.driftSeconds, y: POPPER.fishRiseSpeed,
+        z: (targetZ - point.z) / POPPER.driftSeconds }, true);
+      fish.body.setAngvel({ x: 4.2, y: 2.5, z: 3.6 }, true);
+      launched++;
+    }
+
+    for (const worker of this.actors) {
+      if (worker.ghostPosition || worker.ragdoll.length || worker.baitedBy || worker.hook.phase !== 'idle'
+        || this.time < worker.nextTripAt || this.time < worker.nextPopperHitAt) continue;
+      const point = worker.body.translation();
+      if (distance(point, position) > POPPER.radius || point.y > POPPER.looseFishHeight) continue;
+      worker.nextPopperHitAt = this.time + POPPER.rehitSeconds;
+      this.startRagdoll(worker, position);
+      if (worker !== owner) {
+        worker.metrics.popperHits += 1;
+        this.observeCrew('friendly_hit', owner, worker, `${owner.name}的弹鱼桶弹倒了${worker.name}`);
+      }
+      this.announce(worker, '弹鱼桶把你也弹倒了！', 'bad');
+    }
+    if (launched && !owner.ragdoll.length) this.announce(owner, `弹起 ${launched} 尾！趁没落地按 E`, 'good');
+  }
+
   private makeActor({ id, bot, spawn }: (typeof CREW)[number], roleId: WorkerRoleId): Actor {
     const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(spawn.x, spawn.y, spawn.z).setCcdEnabled(true).lockRotations());
@@ -635,9 +734,9 @@ class IslandSimulation {
       id, roleId, name: WORKER_ROLES[roleId].name, bot, spawn, body,
       random: seededRandom(bot ? `${this.seed}:${id}` : this.seed),
       yaw: 0, aim: { x: 0, z: -1 }, groundContact: true, moveSpeed: 0, swingUntil: 0, castUntil: 0,
-      ragdoll: [], recoverTick: 0, nextTripAt: 0, carrying: null, lifting: null, hook: newHook(),
+      ragdoll: [], recoverTick: 0, nextTripAt: 0, nextPopperAt: 0, nextPopperHitAt: 0, carrying: null, lifting: null, hook: newHook(),
       baitedBy: null, cash: 0, sold: 0, shiftCash: 0, shiftSold: 0, metrics: newActorMetrics(), optimization: false,
-      equipment: { rod: false, pan: false, bait: false },
+      equipment: { rod: false, pan: false, bait: false, popper: false },
       shiftBossBonus: 0, shiftBossFine: 0, favor: 0, memory: [], giftedBait: false, swallowed: false, lastSwallowedDay: 0,
       cycleCash: 0, cycleSold: 0, ghostPosition: null, ghostVelocity: { x: 0, y: 0, z: 0 }, nextPrankAt: 0, revivePaid: 0,
     };
@@ -661,10 +760,11 @@ class IslandSimulation {
       revivePaid: actor.revivePaid,
       equipment: { ...actor.equipment },
       shopOpen: this.canShop(actor, position),
+      popperCooldown: Math.max(0, actor.nextPopperAt - this.time),
       favor: actor.favor,
       memory: actor.memory.join('，'),
       giftedBait: actor.giftedBait,
-      metrics: { ...metrics, fishIncidents: fishIncidents.size, interference: metrics.paddleHits + metrics.fishStolen },
+      metrics: { ...metrics, fishIncidents: fishIncidents.size, interference: metrics.paddleHits + metrics.popperHits + metrics.fishStolen },
       baitedBy: actor.baitedBy?.id ?? null,
       rotation: ragdoll.length ? body.rotation() : yawRotation(yaw),
       velocity,
@@ -1172,6 +1272,7 @@ class IslandSimulation {
     const fish: Fish = {
       id: `fish-${++this.nextEntityId}`, kind, body, state: 'swimming', cargo, hits: 0,
       multiplier: 1, lastHit: -Infinity, lastTouch: null, wakeAt: 0, hopAt: 0, escapeAt: 0,
+      popFlightUntil: null, airCaught: false,
       caughtBy: actor.id, carrierId: null, thrownBy: null, baitPlayerId, grabAgainAt: 0,
     };
     this.fish.push(fish);
@@ -1367,10 +1468,14 @@ class IslandSimulation {
       const dot = (point.x - position.x) * actor.aim.x + (point.z - position.z) * actor.aim.z;
       if (isFish(item) && item.state !== 'stunned' && radius > 0.68 && dot < 0.18 * radius) return [];
       const assist = isFish(item) && item.cargo?.claim && (radius < 0.68 || dot > 0.4 * radius);
-      return [{ item, assist: Boolean(assist), score: radius - 0.45 * dot }];
-    }).sort((a, b) => Number(b.assist) - Number(a.assist) || Number(isFish(b.item)) - Number(isFish(a.item)) || a.score - b.score);
-    const item = candidates[0]?.item;
-    if (!item) return;
+      const airCatch = isFish(item) && !item.airCaught && item.popFlightUntil !== null
+        && this.time < item.popFlightUntil && point.y >= POPPER.catchHeight;
+      return [{ item, assist: Boolean(assist), airCatch, score: radius - 0.45 * dot }];
+    }).sort((a, b) => Number(b.assist) - Number(a.assist) || Number(b.airCatch) - Number(a.airCatch)
+      || Number(isFish(b.item)) - Number(isFish(a.item)) || a.score - b.score);
+    const candidate = candidates[0];
+    if (!candidate) return;
+    const { item, airCatch } = candidate;
     if (isFish(item) && item.cargo) {
       this.gripCargo(actor, item);
       return;
@@ -1403,10 +1508,15 @@ class IslandSimulation {
     }
     item.carrierId = actor.id;
     item.thrownBy = null;
+    item.popFlightUntil = null;
+    if (airCatch) item.airCaught = true;
     item.grabAgainAt = this.time + PLAY.stealGrace;
     this.touchFish(item, actor);
     if (item.baitPlayerId === actor.id) {
-      this.announce(actor, '这条鱼用你当饵，你的绩效不计', 'info');
+      this.announce(actor, airCatch ? '空中接住了！这条活饵鱼不计你的绩效' : '这条鱼用你当饵，你的绩效不计',
+        'info', airCatch ? 'air_catch' : undefined);
+    } else if (airCatch) {
+      this.announce(actor, `空中接住了！成交价 ×${POPPER.airCatchMultiplier}`, 'good', 'air_catch');
     } else if (victim) {
       this.announce(actor, `从${victim.name}手里抢到鱼！`, 'good');
     } else if (interceptorVictim) {
@@ -1593,6 +1703,7 @@ class IslandSimulation {
       if ((fish.state === 'stunned' || fish.state === 'thrown') && this.time >= fish.wakeAt) {
         this.clearCargoClaim(fish);
         fish.state = 'flopping';
+        fish.popFlightUntil = null;
         fish.hits = 0;
         fish.multiplier = 1;
         const lastTouch = this.actors.find(({ id }) => id === fish.lastTouch);
@@ -1614,6 +1725,19 @@ class IslandSimulation {
     }
   }
 
+  private flightLanded(fish: Fish, position: Vec3) {
+    if (fish.body.linvel().y > 0.25 || !onLand(position)) return false;
+    if (fish.popFlightUntil === null) return position.y < 0.56;
+    if (position.y < POPPER.catchHeight) return true;
+
+    let supported = false;
+    this.world.contactPairsWith(fish.body.collider(0), (collider) => {
+      const body = collider.parent();
+      if (!body || this.crates.some((crate) => crate.body.handle === body.handle)) supported = true;
+    });
+    return supported;
+  }
+
   private updateOutcomes() {
     for (const fish of [...this.fish]) {
       const point = fish.body.translation();
@@ -1621,10 +1745,11 @@ class IslandSimulation {
         fish.state = 'escaping';
         fish.escapeAt = this.time + PLAY.fishEscapeSeconds;
       }
-      if (fish.state === 'thrown' && fish.lastTouch && distance(point, ISLAND.scale) <= ISLAND.scale.radius
+      if (fish.state === 'thrown' && fish.popFlightUntil === null && fish.lastTouch && distance(point, ISLAND.scale) <= ISLAND.scale.radius
         && Math.abs(point.y - ISLAND.scale.y) < 0.37) {
         const baitMultiplier = fish.baitPlayerId ? FISHING.baitPriceMultiplier : 1;
-        const amount = Math.round(FISH[fish.kind].price * fish.multiplier * baitMultiplier * this.salePricePercent / 100);
+        const airCatchMultiplier = fish.airCaught ? POPPER.airCatchMultiplier : 1;
+        const amount = Math.round(FISH[fish.kind].price * fish.multiplier * baitMultiplier * airCatchMultiplier * this.salePricePercent / 100);
         const worker = this.actors.find(({ id }) => id === fish.lastTouch);
         if (worker) {
           worker.cash += amount;
@@ -1638,7 +1763,8 @@ class IslandSimulation {
             this.warehouseValue += amount;
           }
           const bait = fish.baitPlayerId ? ` · 活饵 ×${baitMultiplier}` : '';
-          this.announce(worker, `入账 ¥${amount} · ${FISH[fish.kind].name} ×${fish.multiplier.toFixed(2)}${bait}`, 'good');
+          const trick = fish.airCaught ? ` · 空接 ×${airCatchMultiplier}` : '';
+          this.announce(worker, `入账 ¥${amount} · ${FISH[fish.kind].name} ×${fish.multiplier.toFixed(2)}${bait}${trick}`, 'good');
           this.requestBoss('sale', worker, `${worker.name}卖出${FISH[fish.kind].name}`, amount);
         }
         this.removeFish(fish);
@@ -1653,8 +1779,9 @@ class IslandSimulation {
           this.announce(worker, '扑通！鱼溜回海里了', 'bad', 'fish_escape');
         }
         this.removeFish(fish);
-      } else if (fish.state === 'thrown' && fish.body.linvel().y <= 0.25 && point.y < 0.56 && onLand(point)) {
+      } else if (fish.state === 'thrown' && this.flightLanded(fish, point)) {
         fish.state = 'stunned';
+        fish.popFlightUntil = null;
       }
     }
 
