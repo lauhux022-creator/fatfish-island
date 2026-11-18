@@ -1,5 +1,6 @@
 import type { SimInput, SimSnapshot } from '../sim/types.ts';
 import type { WorkerRoleId } from '../sim/cast.ts';
+import type { CampaignPace } from '../sim/pace.ts';
 
 export const ROOM_SOCKET_PATH = '/fatfish-island/rooms';
 export const ROOM_SNAPSHOT_HZ = 20;
@@ -12,7 +13,7 @@ export type RoomErrorCode = 'invalid' | 'not_found' | 'full' | 'character_taken'
 export type RoomClientMessage =
   | {
     type: 'create'; name: string; roleId?: WorkerRoleId; seed?: string; day?: number;
-    shiftSeconds?: number; nightSeconds?: number;
+    pace?: CampaignPace; shiftSeconds?: number; nightSeconds?: number;
   }
   | { type: 'join'; code: string; name: string; roleId?: WorkerRoleId }
   | { type: 'resume'; code: string; token: string }

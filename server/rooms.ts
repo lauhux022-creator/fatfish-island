@@ -192,6 +192,7 @@ export function attachRoomServer(
       const sim = await createSimulation({
         seed: message.seed ?? randomBytes(8).toString('hex'),
         day: message.day,
+        pace: message.pace,
         shiftSeconds: message.shiftSeconds,
         nightSeconds: message.nightSeconds,
         roleId: message.roleId,

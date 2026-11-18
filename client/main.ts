@@ -1,6 +1,7 @@
 import { BUILD_KINDS, type BuildKind } from '../shared/sim/campaign-types';
 import { DEFAULT_WORKER_ROLE, isWorkerRoleId } from '../shared/sim/cast';
 import { STEP_SECONDS } from '../shared/sim/config';
+import { isCampaignPace } from '../shared/sim/pace';
 import { isShopItemId } from '../shared/sim/shop';
 import { emptyInput, type SimInput, type SimSnapshot, type Vec3 } from '../shared/sim/types';
 import { createHud } from './hud';
@@ -31,6 +32,8 @@ const day = Number.isFinite(dayParam) ? Math.min(999, Math.max(1, dayParam)) : 1
 const debug = params.get('debug') === '1';
 const selectedRole = params.get('role');
 const roleId = isWorkerRoleId(selectedRole) ? selectedRole : DEFAULT_WORKER_ROLE;
+const selectedPace = params.get('pace');
+const pace = isCampaignPace(selectedPace) ? selectedPace : 'classic';
 const shiftSeconds = debug && params.has('shiftSeconds') ? Number(params.get('shiftSeconds')) : undefined;
 const nightSeconds = debug && params.has('nightSeconds') ? Number(params.get('nightSeconds')) : undefined;
 const buildKeys = new Map<string, BuildKind>(BUILD_KINDS.map((kind, index) => [`Digit${index + 1}`, kind]));
@@ -48,7 +51,7 @@ async function startGame() {
     import('./scene'),
   ]);
   const scene = createScene(hud.canvas);
-  const sim = await createSimulation({ seed, day, shiftSeconds, nightSeconds, roleId });
+  const sim = await createSimulation({ seed, day, shiftSeconds, nightSeconds, roleId, pace });
   const sound = createSound();
   const events = new AbortController();
   const options = { signal: events.signal };
@@ -85,8 +88,8 @@ async function startGame() {
     },
   });
 
-  lobby = createRoomLobby(app, { connect: room.connect, leave: room.leave }, roleId);
-  picker = createRolePicker(app, roleId);
+  lobby = createRoomLobby(app, { connect: room.connect, leave: room.leave }, roleId, pace);
+  picker = createRolePicker(app, roleId, pace);
   lobby.update(room.status());
 
   function lobbyOpen() {

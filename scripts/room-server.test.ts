@@ -22,6 +22,22 @@ test('room input accepts only shop item IDs and preserves the requested item', (
   }
 });
 
+test('only room creation accepts a whitelisted pace, alongside independent debug durations', () => {
+  for (const pace of ['quick', 'classic'] as const) {
+    const create = readRoomMessage(JSON.stringify({ type: 'create', name: '阿浪', pace, shiftSeconds: 12, nightSeconds: 8 }));
+    assert.equal(create?.type, 'create');
+    assert.equal(create.pace, pace);
+    assert.equal(create.shiftSeconds, 12);
+    assert.equal(create.nightSeconds, 8);
+  }
+  for (const pace of ['unknown', ['quick'], null]) {
+    assert.equal(readRoomMessage(JSON.stringify({ type: 'create', name: '阿浪', pace })), null);
+  }
+  const join = readRoomMessage(JSON.stringify({ type: 'join', code: '4523', name: '黑豆', pace: 'classic' }));
+  assert.equal(join?.type, 'join');
+  assert(!Object.hasOwn(join, 'pace'));
+});
+
 test('room authority seats players, serves one shared DeepSeek decision, and resumes spectators', { timeout: 12000 }, async () => {
   let modelCalls = 0;
   const server = createServer();
@@ -73,11 +89,15 @@ test('room authority seats players, serves one shared DeepSeek decision, and res
 
   try {
     const host = await open();
-    host.send({ type: 'create', name: '阿浪', roleId: 'grok', seed: 'authority-fixture', day: 3 });
+    host.send({ type: 'create', name: '阿浪', roleId: 'grok', seed: 'authority-fixture', day: 3, pace: 'quick' });
     const created = await find(host, isWelcome);
     assert.match(created.code, /^\d{4}$/);
     assert.equal(created.brain, 'deepseek');
     assert.equal(created.role, 'player');
+    const quickStart = await find(host, (message): message is RoomSnapshotMessage =>
+      message.type === 'snapshot' && message.serverTick === 0);
+    assert.equal(quickStart.state.campaign.pace, 'quick');
+    assert.equal(quickStart.state.campaign.remaining, 90);
     const opening = await find(host, (message): message is RoomSnapshotMessage =>
       message.type === 'snapshot' && message.state.boss.line?.say === '今天的账，已经记好了。');
     assert.equal(opening.state.player.roleId, 'grok');
@@ -88,12 +108,14 @@ test('room authority seats players, serves one shared DeepSeek decision, and res
     guest.send({ type: 'join', code: created.code, name: '黑豆', roleId: 'grok' });
     await find(guest, (message): message is Extract<RoomServerMessage, { type: 'error' }> =>
       message.type === 'error' && message.code === 'character_taken');
-    guest.send({ type: 'join', code: created.code, name: '黑豆', roleId: 'kimi' });
+    guest.socket.send(JSON.stringify({ type: 'join', code: created.code, name: '黑豆', roleId: 'kimi', pace: 'classic' }));
     const joined = await find(guest, isWelcome);
     assert.notEqual(joined.playerId, created.playerId);
     const initial = await find(guest, (message): message is RoomSnapshotMessage =>
       message.type === 'snapshot' && message.state.players.filter(({ bot }) => !bot).length === 2);
     const guestStart = initial.state.players.find(({ id }) => id === joined.playerId)!;
+    assert.equal(initial.state.campaign.pace, 'quick');
+    assert(Math.abs(initial.state.campaign.remaining + initial.state.time - 90) < 1e-9);
     assert.equal(guestStart.roleId, 'kimi');
     assert.equal(guestStart.name, '黑豆');
     guest.send({ type: 'input', seq: 1, input: { ...emptyInput, moveZ: 1 } });
@@ -122,6 +144,13 @@ test('room authority seats players, serves one shared DeepSeek decision, and res
     observer.send({ type: 'input', seq: 1, input: { ...emptyInput, moveZ: 1 } });
     await find(observer, (message): message is Extract<RoomServerMessage, { type: 'error' }> =>
       message.type === 'error' && message.code === 'forbidden');
+
+    const classic = await open();
+    classic.send({ type: 'create', name: '老船长', pace: 'classic' });
+    const classicStart = await find(classic, (message): message is RoomSnapshotMessage =>
+      message.type === 'snapshot' && message.serverTick === 0);
+    assert.equal(classicStart.state.campaign.pace, 'classic');
+    assert.equal(classicStart.state.campaign.remaining, 240);
   } finally {
     for (const socket of sockets) socket.terminate();
     authority.close();

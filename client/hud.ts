@@ -1,7 +1,7 @@
 import { normalizePlayerChat } from '../shared/fish-brain/chat';
 import { crewReaction } from '../shared/fish-brain/reactions';
 import { bossBust, crewBust, updatePortrait } from './assets/portraits';
-import { BUILD_KINDS } from '../shared/sim/campaign-types';
+import { BUILD_KINDS, type CampaignCycleResult, type WarehouseView } from '../shared/sim/campaign-types';
 import { CAMPAIGN, ISLAND, PLAY, SHIFT } from '../shared/sim/config';
 import { SHOP, SHOP_ITEM_IDS } from '../shared/sim/shop';
 import type { FishView, ShiftEntry, SimSnapshot } from '../shared/sim/types';
@@ -195,6 +195,14 @@ function guideFor(snapshot: SimSnapshot): Guide {
   return sold > 0 ? nextCast : firstCast;
 }
 
+function recapMarkup(prefix: 'cycle' | 'victory') {
+  return `<dl class="recap-values" data-${prefix}-recap>
+    <div><dt>货款／指标</dt><dd data-${prefix}-secured></dd></div>
+    <div><dt>守住的鱼</dt><dd data-${prefix}-stock></dd></div>
+    <div><dt>海怪抢走</dt><dd data-${prefix}-lost></dd></div>
+  </dl>`;
+}
+
 const markup = `
   <canvas class="world" aria-label="黑心渔场三维游戏画面"></canvas>
   <div class="edge-shade" aria-hidden="true"></div>
@@ -204,7 +212,7 @@ const markup = `
         <span class="brand-mark" aria-hidden="true"><i></i></span>
         <h1><small>大肥鱼的</small>黑心渔场</h1>
       </div>
-      <p class="shift-strip"><span data-day>第 — 天</span><i></i><span><span data-phase-label>白天</span> <time data-clock>—:—</time></span></p>
+      <p class="shift-strip"><span data-day>第 — 天</span><i></i><span><span data-phase-label>白天</span> <time data-clock>—:—</time></span><span class="pace-tag" data-pace-label hidden>短班</span></p>
       <section class="shift-kpi" aria-label="当日团队指标" data-kpi>
         <div class="shift-kpi-label">
           <span>团队指标</span>
@@ -245,7 +253,10 @@ const markup = `
         <strong data-settlement-kpi></strong>
         <span class="settlement-status" data-settlement-status></span>
       </div>
-      <p class="cycle-result" data-cycle-result hidden></p>
+      <section class="cycle-result" data-cycle-result aria-label="三天结算" hidden>
+        <p data-cycle-verdict></p>
+        ${recapMarkup('cycle')}
+      </section>
       <p class="standings-note" data-standings-note></p>
       <section class="shift-interview" data-shift-interview role="status" hidden>
         <div class="interview-speaker">
@@ -288,9 +299,11 @@ const markup = `
     <span>螃蟹 Boss</span><b data-crab-health></b>
     <progress aria-label="螃蟹生命" data-crab-progress value="0" max="1"></progress>
   </aside>
-  <section class="campaign-victory" data-campaign-victory aria-label="本岛通关" hidden>
-    <h2>本岛通关</h2>
+  <section class="campaign-victory" data-campaign-victory aria-labelledby="campaign-victory-title" hidden>
+    <h2 id="campaign-victory-title">本岛通关</h2>
     <p>螃蟹倒下了。今天的加班，到此为止。</p>
+    ${recapMarkup('victory')}
+    <p class="victory-ghosts" data-victory-ghosts hidden></p>
     <button type="button" data-control="campaign-exit">再玩一局</button>
   </section>
   <form class="boss-chat" id="boss-chat" data-boss-form hidden>
@@ -461,7 +474,10 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   const continueButton = ui<HTMLButtonElement>('[data-control="continue"]');
   const nextShift = ui('[data-next-shift]');
   const cycleResult = ui<HTMLElement>('[data-cycle-result]');
+  const cycleVerdict = ui('[data-cycle-verdict]');
+  const cycleRecap = recapView('cycle');
   const phaseLabel = ui('[data-phase-label]');
+  const paceLabel = ui<HTMLElement>('[data-pace-label]');
   const cycleLabel = ui('[data-cycle-label]');
   const cycleTotal = ui('[data-cycle-total]');
   const warehouse = ui('[data-warehouse]');
@@ -475,7 +491,9 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   const crabHealth = ui('[data-crab-health]');
   const crabProgress = ui<HTMLProgressElement>('[data-crab-progress]');
   const victory = ui<HTMLElement>('[data-campaign-victory]');
-  const victoryButton = ui('[data-control="campaign-exit"]');
+  const victoryButton = ui<HTMLButtonElement>('[data-control="campaign-exit"]');
+  const victoryRecap = recapView('victory');
+  const victoryGhosts = ui<HTMLElement>('[data-victory-ghosts]');
   let roomCode = '';
   let previousBoard = '';
   let boardPinned = false;
@@ -483,6 +501,24 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   let lastLineId: number | undefined;
   let speakUntil = 0;
   let composing = false;
+
+  function recapView(prefix: 'cycle' | 'victory') {
+    return {
+      secured: ui(`[data-${prefix}-secured]`),
+      stock: ui(`[data-${prefix}-stock]`),
+      lost: ui(`[data-${prefix}-lost]`),
+    };
+  }
+
+  function fillRecap(
+    recap: ReturnType<typeof recapView>,
+    { secured, target }: Pick<CampaignCycleResult, 'secured' | 'target'>,
+    { stock, lostFish, lostValue }: WarehouseView,
+  ) {
+    writeText(recap.secured, `¥${secured} / ¥${target}`);
+    writeText(recap.stock, `${stock} 尾`);
+    writeText(recap.lost, `${lostFish} 尾${lostValue ? ` · ¥${lostValue}` : ''}`);
+  }
 
   function setShopOpen(open: boolean) {
     if (open) {
@@ -695,7 +731,9 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
       }));
     const displayDay = settled?.day ?? snapshot.day;
     const cycle = settled && snapshot.campaign.lastCycle?.day === displayDay ? snapshot.campaign.lastCycle : null;
-    const key = JSON.stringify([displayDay, Boolean(settled), teamRevenue, teamTarget, ranking, cycle]);
+    const { warehouse } = snapshot.campaign;
+    const totals = cycle ? [warehouse.stock, warehouse.lostFish, warehouse.lostValue] : null;
+    const key = JSON.stringify([displayDay, Boolean(settled), teamRevenue, teamTarget, ranking, cycle, totals]);
     if (key !== previousBoard) {
       previousBoard = key;
       standings.dataset.day = String(displayDay);
@@ -706,9 +744,10 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
       cycleResult.hidden = !cycle;
       if (cycle) {
         cycleResult.dataset.passed = String(cycle.passed);
-        const verdict = cycle.passed ? '达标 · 螃蟹 Boss 上岸'
-          : cycle.eaten ? `未达标 · ${cycle.eaten.name}被吞，下班后成幽灵` : '未达标';
-        writeText(cycleResult, `三天指标 ¥${cycle.secured} / ¥${cycle.target} · ${verdict}`);
+        const verdict = cycle.passed ? '三天达标，螃蟹上岸了'
+          : cycle.eaten ? `三天未达标，${cycle.eaten.name}被吞，下一班成幽灵` : '三天未达标';
+        writeText(cycleVerdict, verdict);
+        fillRecap(cycleRecap, cycle, warehouse);
       }
       writeText(nextShift, cycle?.passed ? '迎战螃蟹' : '开始下一班');
       if (settled) {
@@ -762,11 +801,13 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
 
   function updateCampaign(snapshot: SimSnapshot) {
     const { campaign, player, players, shiftPaused } = snapshot;
-    const { phase, cycle, warehouse: { lostFish, lostValue, stock } } = campaign;
+    const { phase, pace, cycle, warehouse: { lostFish, lostValue, stock } } = campaign;
     root.dataset.campaignPhase = phase;
+    root.dataset.campaignPace = pace ?? 'classic';
     root.dataset.ghost = String(player.ghost);
     writeText(touchSwing, player.ghost ? '作怪' : '挥桨');
     writeText(phaseLabel, { day: '白天', night: '夜晚', boss: '决战', cleared: '通关' }[phase]);
+    paceLabel.hidden = pace !== 'quick';
     writeText(cycleLabel, `三天指标 · 第 ${cycle.lastDay} 天结算`);
     writeText(cycleTotal, `¥${cycle.secured} / ¥${cycle.target}`);
     writeText(warehouse, `${stock} 尾${lostFish ? ` · 被抢 ${lostFish} 尾（¥${lostValue}）` : ''}`);
@@ -792,8 +833,16 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
       crabProgress.max = crab.maxHp;
       crabProgress.value = crab.hp;
     }
+    const openedVictory = victory.hidden && phase === 'cleared';
     victory.hidden = phase !== 'cleared';
-    if (!victory.hidden) writeText(victoryButton, root.dataset.roomMode === 'local' ? '再玩一局' : '离开房间');
+    if (!victory.hidden) {
+      fillRecap(victoryRecap, campaign.lastCycle ?? cycle, campaign.warehouse);
+      const ghosts = players.filter(({ ghost }) => ghost).map(({ name }) => name);
+      victoryGhosts.hidden = !ghosts.length;
+      if (!victoryGhosts.hidden) writeText(victoryGhosts, `仍是幽灵的船员 · ${ghosts.join('、')}`);
+      writeText(victoryButton, root.dataset.roomMode === 'local' ? '再玩一局' : '离开房间');
+      if (openedVictory && !root.querySelector('dialog:modal')) victoryButton.focus({ preventScroll: true });
+    }
   }
 
   function update(snapshot: SimSnapshot) {

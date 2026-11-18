@@ -45,7 +45,9 @@ async function boot(virtual, small = false) {
     await page.waitForFunction(() => window.fatfishDebug?.snapshot().tick > 2);
   }
   assert((await snapshot(client)).tick > 2);
-  assert.equal(await page.locator('[data-version]').textContent(), '0.7.0');
+  const version = await page.locator('[data-version]').textContent();
+  assert.match(version ?? '', /^\d+\.\d+\.\d+$/);
+  if (process.env.EXPECTED_VERSION) assert.equal(version, process.env.EXPECTED_VERSION);
   if (process.env.EXPECTED_COMMIT) {
     assert.equal(await page.locator('[data-commit]').textContent(), process.env.EXPECTED_COMMIT);
   }

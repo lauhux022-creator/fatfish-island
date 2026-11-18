@@ -10,6 +10,7 @@ import { assignWorkerRoles, DEFAULT_WORKER_ROLE, WORKER_ROLES, type WorkerAnimat
 import { BOSS, CAMPAIGN, CREW, FISH, FISHING, ISLAND, PLAY, SHIFT, STEP_SECONDS, TEAM_DAILY_KPI, TICKS_PER_SECOND, WORKER_MOTION } from './config';
 import { buildAhead } from './construction';
 import { Defense } from './defense';
+import { CAMPAIGN_PACES, isCampaignPace, type CampaignPace } from './pace';
 import { resolveMovement, yawRotation } from './prediction';
 import { seededRandom } from './random';
 import { castChargeSeconds, isShopItemId, SHOP, weaponStats, type ShopEquipment, type ShopItemId } from './shop';
@@ -22,6 +23,7 @@ import type {
 interface SimulationOptions {
   seed?: string;
   day?: number;
+  pace?: CampaignPace;
   shiftSeconds?: number;
   nightSeconds?: number;
   roleId?: WorkerRoleId;
@@ -199,6 +201,7 @@ class IslandSimulation {
   private readonly seed: string;
   private readonly random: () => number;
   private readonly bots: ReturnType<typeof createBotController>;
+  private readonly pace: CampaignPace;
   private readonly shiftLength: number;
   private readonly nightLength: number;
   private readonly defense: Defense;
@@ -226,20 +229,25 @@ class IslandSimulation {
   private rewardCrates = 0;
 
   constructor({
-    seed = 'dock-shift', day = 1, shiftSeconds = PLAY.daySeconds, nightSeconds = CAMPAIGN.nightSeconds,
+    seed = 'dock-shift', day = 1, pace = 'classic', shiftSeconds, nightSeconds,
     roleId = DEFAULT_WORKER_ROLE, brain = new MockBrain(),
   }: SimulationOptions) {
     this.seed = seed;
+    this.pace = isCampaignPace(pace) ? pace : 'classic';
     this.day = Number.isFinite(day) ? Math.max(1, Math.trunc(day)) : 1;
     this.cycleFirstDay = this.day;
     this.random = seededRandom(`${seed}:world`);
     this.bots = createBotController(seed);
     this.defense = new Defense(seed);
     this.boss = new FishBrainRuntime(brain);
-    const seconds = Number.isFinite(shiftSeconds) ? clamp(shiftSeconds, SHIFT.shortestSeconds, PLAY.daySeconds) : PLAY.daySeconds;
+    const timings = CAMPAIGN_PACES[this.pace];
+    const dayOverride = shiftSeconds ?? timings.daySeconds;
+    const nightOverride = nightSeconds ?? timings.nightSeconds;
+    const seconds = Number.isFinite(dayOverride)
+      ? clamp(dayOverride, SHIFT.shortestSeconds, PLAY.daySeconds) : timings.daySeconds;
     this.shiftLength = Math.round(seconds * TICKS_PER_SECOND);
-    const night = Number.isFinite(nightSeconds)
-      ? clamp(nightSeconds, CAMPAIGN.nightMinimumSeconds, CAMPAIGN.nightSeconds) : CAMPAIGN.nightSeconds;
+    const night = Number.isFinite(nightOverride)
+      ? clamp(nightOverride, CAMPAIGN.nightMinimumSeconds, CAMPAIGN.nightSeconds) : timings.nightSeconds;
     this.nightLength = Math.round(night * TICKS_PER_SECOND);
     this.shiftEnd = this.shiftLength;
     this.world.timestep = STEP_SECONDS;
@@ -402,6 +410,7 @@ class IslandSimulation {
 
   private viewCampaign(): CampaignView {
     return {
+      pace: this.pace,
       phase: this.phase,
       remaining: this.phaseRemaining,
       ...this.defense.snapshot(),
@@ -429,7 +438,7 @@ class IslandSimulation {
 
   private get baseTeamTarget() {
     const target = TEAM_DAILY_KPI[Math.min(this.day - 1, TEAM_DAILY_KPI.length - 1)];
-    // Short shifts exist for reproducing the same rules via the debug override.
+    // The fishing window sets its share of the classic daily goal.
     return Math.round(target * this.shiftLength / (PLAY.daySeconds * TICKS_PER_SECOND));
   }
 

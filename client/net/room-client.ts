@@ -5,6 +5,7 @@ import {
 import { BUILD_KINDS } from '../../shared/sim/campaign-types';
 import { isWorkerAnimation, isWorkerRoleId, type WorkerRoleId } from '../../shared/sim/cast';
 import { STEP_SECONDS } from '../../shared/sim/config';
+import { isCampaignPace, type CampaignPace } from '../../shared/sim/pace';
 import { predictPlayerMovement } from '../../shared/sim/prediction';
 import { emptyInput, type PlayerView, type SimInput, type SimSnapshot } from '../../shared/sim/types';
 import { interpolateRoom, selectPerspective } from './interpolation';
@@ -25,6 +26,7 @@ export interface RoomConnectIntent {
   name: string;
   code?: string;
   roleId?: WorkerRoleId;
+  pace?: CampaignPace;
 }
 
 export interface RoomClientStatus {
@@ -33,6 +35,7 @@ export interface RoomClientStatus {
   playerId: string | null;
   focusId: string | null;
   brain: RoomBrain | null;
+  pace: CampaignPace | null;
   error: string | null;
   humans: number;
 }
@@ -68,7 +71,7 @@ interface BufferedSnapshot {
 }
 
 const localStatus: RoomClientStatus = {
-  mode: 'local', code: null, playerId: null, focusId: null, brain: null, error: null, humans: 0,
+  mode: 'local', code: null, playerId: null, focusId: null, brain: null, pace: null, error: null, humans: 0,
 };
 
 function endpoint(value: string): string | null {
@@ -126,6 +129,7 @@ function defenseEntity(value: unknown): value is Record<string, unknown> {
 
 function campaignShape(value: unknown) {
   if (!record(value) || !['day', 'night', 'boss', 'cleared'].some((phase) => phase === value.phase)
+    || !isCampaignPace(value.pace)
     || !numbers(value, ['remaining', 'reviveCost', 'wood'])
     || !record(value.warehouse) || !vector(value.warehouse.position)
     || !numbers(value.warehouse, ['stock', 'value', 'lostFish', 'lostValue'])
@@ -357,7 +361,7 @@ export function createRoomClient(options: ClientOptions) {
       const z = visual.position.z - prediction.position.z;
       correction = Math.hypot(x, z) < 0.95 ? { x, z, at: now } : null;
     } else correction = null;
-    update({ humans: message.state.players.filter((player) => !player.bot).length });
+    update({ humans: message.state.players.filter((player) => !player.bot).length, pace: message.state.campaign.pace });
   }
 
   function open(url: string, message: RoomClientMessage) {
@@ -424,11 +428,11 @@ export function createRoomClient(options: ClientOptions) {
     const name = [...intent.name.trim()].slice(0, ROOM_MAX_NAME).join('');
     returnLocal();
     update({ mode: 'connecting', code: code || null });
-    const { roleId } = intent;
+    const { roleId, pace } = intent;
     open(url, code
       ? { type: 'join', code, name, roleId }
       : {
-        type: 'create', name, roleId, seed: options.seed, day: options.day,
+        type: 'create', name, roleId, pace, seed: options.seed, day: options.day,
         shiftSeconds: options.shiftSeconds, nightSeconds: options.nightSeconds,
       });
   }

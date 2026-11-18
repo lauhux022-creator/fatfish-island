@@ -1,6 +1,14 @@
 import { ROOM_CODE_PATTERN, ROOM_MAX_NAME, ROOM_SOCKET_PATH } from '../shared/net/types';
 import { WORKER_ROLE_IDS, WORKER_ROLES, isWorkerRoleId, type WorkerRoleId } from '../shared/sim/cast';
+import { CAMPAIGN_PACES, isCampaignPace, type CampaignPace } from '../shared/sim/pace';
 import type { RoomClientStatus, RoomConnectIntent } from './net/room-client';
+
+const paceNames: Record<CampaignPace, string> = { classic: '经典班', quick: '短班' };
+const paceOptions: readonly CampaignPace[] = ['classic', 'quick'];
+
+function duration(seconds: number) {
+  return seconds % 60 === 0 ? `${seconds / 60} 分钟` : `${seconds} 秒`;
+}
 
 const markup = `
   <div class="room-dialog-head">
@@ -15,6 +23,12 @@ const markup = `
     <label>角色<select data-room-character>
       <option value="">加入时自动分配</option>
       ${WORKER_ROLE_IDS.map((id) => `<option value="${id}">${WORKER_ROLES[id].name}</option>`).join('')}
+    </select></label>
+    <label title="加入时沿用房主的班次">建房班次<select data-room-pace>
+      ${paceOptions.map((pace) => {
+        const { daySeconds, nightSeconds } = CAMPAIGN_PACES[pace];
+        return `<option value="${pace}">${paceNames[pace]} · 白天 ${duration(daySeconds)} / 夜晚 ${duration(nightSeconds)}</option>`;
+      }).join('')}
     </select></label>
     <div class="room-form-actions">
       <button type="button" class="room-create" data-room-create>创建房间</button>
@@ -34,6 +48,7 @@ const markup = `
       <div class="room-slip-meta">
         <strong data-room-crew></strong>
         <span data-room-role></span>
+        <span data-room-current-pace></span>
       </div>
     </div>
     <button type="button" data-room-copy>复制房间码</button>
@@ -68,6 +83,7 @@ export function createRoomLobby(
   app: HTMLElement,
   controls: { connect(intent: RoomConnectIntent): void; leave(): void },
   preferred: WorkerRoleId,
+  preferredPace: CampaignPace = 'classic',
 ) {
   const tools = document.createElement('div');
   tools.className = 'account-tools';
@@ -106,12 +122,15 @@ export function createRoomLobby(
   const name = find<HTMLInputElement>('[data-room-name]');
   const code = find<HTMLInputElement>('[data-room-code-input]');
   const character = find<HTMLSelectElement>('[data-room-character]');
+  const pace = find<HTMLSelectElement>('[data-room-pace]');
   const create = find<HTMLButtonElement>('[data-room-create]');
   const join = find<HTMLButtonElement>('[data-room-join]');
   const feedback = find<HTMLElement>('[data-room-feedback]');
   const displayCode = find<HTMLOutputElement>('[data-room-display-code]');
   const count = find<HTMLElement>('[data-room-crew]');
   const role = find<HTMLElement>('[data-room-role]');
+  const currentPace = find<HTMLElement>('[data-room-current-pace]');
+  pace.value = preferredPace;
   endpoint.value = defaultEndpoint();
   address.open = !endpoint.value;
   let mode: RoomClientStatus['mode'] = 'local';
@@ -128,7 +147,8 @@ export function createRoomLobby(
     const workerName = [...name.value.trim()].slice(0, ROOM_MAX_NAME).join('');
     const roleId = isWorkerRoleId(character.value) ? character.value : roomCode ? undefined : preferred;
     feedback.textContent = '';
-    controls.connect({ url, name: workerName, code: roomCode, roleId });
+    if (roomCode) controls.connect({ url, name: workerName, code: roomCode, roleId });
+    else controls.connect({ url, name: workerName, roleId, pace: isCampaignPace(pace.value) ? pace.value : preferredPace });
   }
 
   toggle.addEventListener('click', () => {
@@ -159,7 +179,7 @@ export function createRoomLobby(
   });
 
   function update(next: RoomClientStatus) {
-    const key = JSON.stringify([next.mode, next.code, next.humans, next.error, next.brain]);
+    const key = JSON.stringify([next.mode, next.code, next.humans, next.error, next.brain, next.pace]);
     if (key === lastUpdate) return;
     lastUpdate = key;
     const previousMode = mode;
@@ -179,6 +199,7 @@ export function createRoomLobby(
     displayCode.value = next.code ?? '';
     count.textContent = `${next.humans} / 4 在岗`;
     role.textContent = spectating ? '只读观战' : mode === 'reconnecting' ? '连接中断' : '联机值班';
+    currentPace.textContent = next.pace ? paceNames[next.pace] : '';
     status.hidden = mode === 'local' && !next.error;
     status.dataset.mode = mode;
     status.textContent = mode === 'local' ? next.error ?? '' : mode === 'reconnecting' ? '正在重连…' : waiting ? '正在连接…'

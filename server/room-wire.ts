@@ -3,6 +3,7 @@ import { ROOM_CODE_PATTERN, ROOM_MAX_NAME, type RoomClientMessage } from '../sha
 import { BUILD_KINDS, type BuildKind } from '../shared/sim/campaign-types';
 import { isWorkerRoleId } from '../shared/sim/cast';
 import { CAMPAIGN, PLAY, SHIFT } from '../shared/sim/config';
+import { isCampaignPace } from '../shared/sim/pace';
 import { isShopItemId } from '../shared/sim/shop';
 import type { SimInput } from '../shared/sim/types';
 
@@ -68,6 +69,7 @@ export function readRoomMessage(data: string): RoomClientMessage | null {
     case 'create': {
       if (typeof value.name !== 'string') return null;
       if (value.roleId !== undefined && !isWorkerRoleId(value.roleId)) return null;
+      if (value.pace !== undefined && !isCampaignPace(value.pace)) return null;
       if (value.seed !== undefined && typeof value.seed !== 'string') return null;
       if (value.day !== undefined && !Number.isSafeInteger(value.day)) return null;
       if (value.shiftSeconds !== undefined && !finite(value.shiftSeconds)) return null;
@@ -77,6 +79,7 @@ export function readRoomMessage(data: string): RoomClientMessage | null {
         type: 'create',
         name: normalize(value.name, ROOM_MAX_NAME),
         roleId: value.roleId,
+        pace: value.pace,
         seed: seed || undefined,
         day: value.day === undefined ? undefined : Math.max(1, Math.min(999, Number(value.day))),
         shiftSeconds: value.shiftSeconds === undefined ? undefined

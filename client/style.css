@@ -965,8 +965,10 @@ h1 small {
 
 .role-toggle { white-space: nowrap; }
 .role-dialog p { margin: 12px 0; color: #4b5444; font-size: 12px; }
+.setup-field { min-width: 0; margin: 12px 0 0; padding: 0; border: 0; }
+.setup-field legend { margin: 0 0 5px; color: #394b3b; font-size: 12px; font-weight: 850; }
 .role-choices { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
-.role-choices label {
+.role-choices label, .pace-choices label {
   position: relative;
   display: grid;
   place-items: center;
@@ -979,10 +981,21 @@ h1 small {
   font-size: 12px;
   cursor: pointer;
 }
-.role-choices label:has(input:checked) { outline: 2px solid #a85c29; background: #ffdf94; }
-.role-choices label:has(input:focus-visible) { outline: 3px solid #315d56; }
-.role-choices input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.role-choices label:has(input:checked), .pace-choices label:has(input:checked) { outline: 2px solid #a85c29; background: #ffdf94; }
+.role-choices label:has(input:focus-visible), .pace-choices label:has(input:focus-visible) { outline: 3px solid #315d56; }
+.role-choices input, .pace-choices input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .role-choices img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 3px; }
+.pace-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.pace-choices label { min-height: 51px; align-content: center; justify-items: start; gap: 2px; padding: 6px 8px; }
+.pace-choices small { color: #4b5a48; font-size: 10px; font-weight: 750; }
+.role-dialog .setup-confirm { width: 100%; min-height: 42px; }
+.shift-strip .pace-tag { padding: 1px 4px; border-radius: 3px; background: #efc37c; color: #283f33; font-size: .9em; font-weight: 900; }
+@media (max-height: 460px) and (orientation: landscape) {
+  .role-dialog { padding: 12px 15px; }
+  .role-dialog .role-choices img { max-width: 56px; }
+  .role-dialog .setup-field { margin-top: 9px; }
+  .role-dialog p { margin: 8px 0; }
+}
 .room-form select {
   box-sizing: border-box;
   width: 100%;
@@ -1096,12 +1109,24 @@ h1 small {
 
 .cycle-result { padding: 7px 8px; border-radius: 4px; background: #f1d8c1; color: #843f27; font-size: 11px; font-weight: 850; }
 .cycle-result[data-passed="true"] { background: #e2ebc9; color: #31583d; }
+.cycle-result > p { margin: 0; font-size: 12px; font-weight: 850; }
+.recap-values {
+  display: grid;
+  grid-template-columns: 1.12fr 0.88fr 1fr;
+  gap: 5px;
+  margin: 6px 0 0;
+}
+.recap-values div { min-width: 0; border: 1px solid #604b372b; border-radius: 4px; padding: 4px 6px; background: #fff7db93; }
+.recap-values dt { color: #56604b; font-size: 10px; font-weight: 750; }
+.recap-values dd { margin: 0; color: #274039; font-size: 12px; font-weight: 900; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .campaign-victory {
   position: absolute;
   z-index: 4;
   inset: 50% auto auto 50%;
   transform: translate(-50%, -50%);
   width: min(350px, calc(100vw - 28px));
+  max-height: calc(100dvh - 28px);
+  overflow: auto;
   padding: 16px;
   border: 2px solid var(--ink);
   border-top: 5px solid #b97433;
@@ -1111,7 +1136,8 @@ h1 small {
   color: var(--ink);
 }
 .campaign-victory h2, .campaign-victory p { margin: 0 0 8px; }
-.campaign-victory button { background: var(--orange); }
+.campaign-victory .victory-ghosts { margin: 8px 0 0; color: #426052; font-size: 11px; font-weight: 850; }
+.campaign-victory button { width: 100%; min-height: 44px; margin-top: 11px; background: var(--orange); }
 .game[data-campaign-phase="cleared"] .task, .game[data-campaign-phase="cleared"] .touch-controls,
 .game[data-campaign-phase="cleared"] .boss-chat-toggle { display: none; }
 

@@ -1,3 +1,4 @@
+import type { CampaignPace } from './pace';
 import type { Vec3 } from './types';
 
 export const BUILD_KINDS = ['fence', 'trap', 'lure'] as const;
@@ -48,6 +49,7 @@ export interface CampaignCycleResult {
 }
 
 export interface CampaignView {
+  pace: CampaignPace;
   phase: CampaignPhase;
   remaining: number;
   wood: number;
