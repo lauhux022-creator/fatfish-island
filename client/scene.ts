@@ -1,9 +1,11 @@
 import * as T from 'three';
 import { ISLAND, PLAY } from '../shared/sim/config';
-import type { FishState, Pose, SimSnapshot, Vec3 } from '../shared/sim/types';
-import { makeGeometryKit, palette as p } from './assets/geometry';
+import type { FishState, PlayerView, Pose, SimSnapshot, Vec3 } from '../shared/sim/types';
+import { crewBadge } from './assets/crew-badge';
+import { makeGeometryKit } from './assets/geometry';
 import { createModels } from './assets/models';
 import { makeIsland } from './assets/world';
+import { crewColor } from './crew-colors';
 
 function isWater(x: number, z: number) {
   return z < ISLAND.shoreZ || z > ISLAND.backZ || x < ISLAND.minX || x > ISLAND.maxX;
@@ -59,14 +61,16 @@ export function createScene(canvas: HTMLCanvasElement) {
   let width = 0;
   let height = 0;
   let previous = -1;
-  let walk = 0;
   let aimPoint: { x: number; z: number } | null = null;
+  let aimingAtCrew = false;
+  let localPlayerId = '';
+  let crewViews: PlayerView[] = [];
 
   const kit = makeGeometryKit();
   const models = createModels(kit);
   const animateIsland = makeIsland(world, kit);
-  const player = models.worker(world);
-  const fish = new Map<string, ReturnType<typeof models.fish> & { state: FishState }>();
+  const workers = new Map<string, ReturnType<typeof createWorker>>();
+  const fish = new Map<string, ReturnType<typeof models.fish> & { state: FishState; carrierId: string | null }>();
   const crates = new Map<string, ReturnType<typeof models.crate>>();
   const scalePosition = new T.Vector3(ISLAND.scale.x, ISLAND.groundY + 0.56, ISLAND.scale.z);
   const track = new T.RingGeometry(0.94, 1, 44);
@@ -78,36 +82,53 @@ export function createScene(canvas: HTMLCanvasElement) {
   let soldPrevious = 0;
   let soldAt = -10;
 
-  const lineGeometry = new T.BufferGeometry();
-  const lineArray = new Float32Array(15);
-  const linePoints = new T.BufferAttribute(lineArray, 3).setUsage(T.DynamicDrawUsage);
-  lineGeometry.setAttribute('position', linePoints);
-  const line = new T.Line(lineGeometry, new T.LineBasicMaterial({ color: 0xffeea8, transparent: true, opacity: 0.88 }));
-  line.frustumCulled = false;
-  world.add(line);
-  const bobber = kit.group(world);
-  kit.orb(bobber, 0xffe5a1, 0, -0.006, 0, 0.13, 0.12, 0.13);
-  kit.orb(bobber, 0xe66844, 0, 0.042, 0, 0.115, 0.085, 0.115);
-  kit.box(bobber, 0x693d32, 0, 0.135, 0, 0.028, 0.089, 0.028);
-  const bite = new T.Mesh(track, new T.MeshBasicMaterial({ color: 0xffd968, transparent: true, opacity: 0, depthWrite: false }));
-  bite.rotation.x = -Math.PI / 2;
-  world.add(bite);
   const crosshair = new T.Mesh(new T.RingGeometry(0.73, 1, 28, 1), new T.MeshBasicMaterial({ color: 0xffedd0, opacity: 0.72, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 }));
   crosshair.rotation.x = -Math.PI / 2;
   world.add(crosshair);
 
-  const shockwave = kit.group(world);
-  const shockArcs = [0.09, 0.14, 0.2].map((arcWidth, index) => {
+  const shockArcGeometries = [0.09, 0.14, 0.2].map((arcWidth, index) => {
     const start = -0.66 + index * 0.05;
-    const geometry = new T.RingGeometry(0.82 - arcWidth, 0.82 + index * 0.14, 30, 1, start, Math.PI * 0.88);
-    const mat = new T.MeshBasicMaterial({ color: index ? 0xffe8a8 : 0xfff1c9, transparent: true, opacity: 0, depthWrite: false, side: T.DoubleSide });
-    const streak = new T.Mesh(geometry, mat);
-    streak.rotation.x = -Math.PI / 2;
-    streak.rotation.z = Math.PI;
-    streak.position.y = index * 0.065;
-    shockwave.add(streak);
-    return streak;
+    return new T.RingGeometry(0.82 - arcWidth, 0.82 + index * 0.14, 30, 1, start, Math.PI * 0.88);
   });
+
+  function createWorker(view: PlayerView, index: number) {
+    const accent = crewColor(view.id);
+    const model = models.worker(world, view.id);
+    const badge = crewBadge(world, view.id === localPlayerId ? '你' : view.name, accent);
+    const lineColor = view.bot ? new T.Color(accent).lerp(new T.Color(0xfffaf0), 0.6) : new T.Color(0xffeea8);
+    const lineGeometry = new T.BufferGeometry();
+    const linePoints = new T.BufferAttribute(new Float32Array(15), 3).setUsage(T.DynamicDrawUsage);
+    lineGeometry.setAttribute('position', linePoints);
+    const line = new T.Line(lineGeometry, new T.LineBasicMaterial({
+      color: lineColor, transparent: true, opacity: view.bot ? 0.74 : 0.88,
+    }));
+    line.frustumCulled = false;
+    world.add(line);
+    const bobber = kit.group(world);
+    kit.orb(bobber, 0xffe5a1, 0, -0.006, 0, 0.13, 0.12, 0.13);
+    kit.orb(bobber, view.bot ? accent : 0xe66844, 0, 0.042, 0, 0.115, 0.085, 0.115);
+    kit.box(bobber, 0x693d32, 0, 0.135, 0, 0.028, 0.089, 0.028);
+    const bite = new T.Mesh(track, new T.MeshBasicMaterial({ color: 0xffd968, transparent: true, opacity: 0, depthWrite: false }));
+    bite.rotation.x = -Math.PI / 2;
+    const splash = new T.Mesh(track, new T.MeshBasicMaterial({ color: 0xdafff2, transparent: true, opacity: 0, depthWrite: false }));
+    splash.rotation.x = -Math.PI / 2;
+    world.add(bite, splash);
+    const shockwave = kit.group(world);
+    const shockArcs = shockArcGeometries.map((geometry, index) => {
+      const mat = new T.MeshBasicMaterial({ color: index ? 0xffe8a8 : 0xfff1c9, transparent: true, opacity: 0, depthWrite: false, side: T.DoubleSide });
+      const streak = new T.Mesh(geometry, mat);
+      streak.rotation.x = -Math.PI / 2;
+      streak.rotation.z = Math.PI;
+      streak.position.y = index * 0.065;
+      shockwave.add(streak);
+      return streak;
+    });
+
+    return {
+      model, badge, lineColor, line, linePoints, bobber, bite, splash, shockwave, shockArcs,
+      walk: (index * 2.3) % (Math.PI * 2), ragdoll: false, wet: false, splashAt: -10,
+    };
+  }
 
   const confetti = Array.from({ length: 22 }, (_, i) => {
     const object = kit.orb(world, [0xffe9b0, 0xfeb547, 0x60b5a3, 0xf0995f][i % 4], 0, 0, 0, 0.062, 0.099, 0.064, true);
@@ -117,16 +138,48 @@ export function createScene(canvas: HTMLCanvasElement) {
   });
   const effects: { x: number; y: number; z: number; born: number; scale: number }[] = [];
   const impactOrigin = new T.Vector3();
-  let ragdollPrevious = false;
+
+  function crewAim(x: number, y: number) {
+    let closest: PlayerView | undefined;
+    let nearest = Infinity;
+    for (const mate of crewViews) {
+      if (mate.id === localPlayerId || mate.ragdoll || mate.baitedBy) continue;
+      const point = mate.position;
+      projection.set(point.x, point.y, point.z).project(camera);
+      if (projection.z < -1 || projection.z > 1) continue;
+      const dx = Math.abs(x - projection.x);
+      const dy = Math.abs(y - projection.y);
+      const centerX = projection.x;
+      projection.set(point.x + 0.34, point.y, point.z).project(camera);
+      if (dx > Math.abs(projection.x - centerX)) continue;
+      projection.set(point.x, point.y - 0.49, point.z).project(camera);
+      if (y < projection.y) continue;
+      projection.set(point.x, point.y + (mate.optimization ? 1.24 : 0.8), point.z).project(camera);
+      if (y > projection.y) continue;
+      const distance = dx * dx + dy * dy;
+      if (distance < nearest) {
+        closest = mate;
+        nearest = distance;
+      }
+    }
+    return closest;
+  }
 
   function aim(clientX: number, clientY: number) {
     aimPoint = null;
+    aimingAtCrew = false;
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
     if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
       return null;
     }
     cursor.set((clientX - rect.left) / rect.width * 2 - 1, 1 - (clientY - rect.top) / rect.height * 2);
+    const mate = crewAim(cursor.x, cursor.y);
+    if (mate) {
+      aimingAtCrew = true;
+      aimPoint = { x: mate.position.x, z: mate.position.z };
+      return aimPoint;
+    }
     ray.setFromCamera(cursor, camera);
     if (!ray.ray.intersectPlane(ground, aimHit)) return null;
     if (isWater(aimHit.x, aimHit.z)) {
@@ -164,12 +217,14 @@ export function createScene(canvas: HTMLCanvasElement) {
     camera.updateMatrixWorld();
   }
 
-  function animatePlayer(snapshot: SimSnapshot, delta: number, seconds: number) {
-    const view = snapshot.player;
+  function animatePlayer(view: PlayerView, worker: ReturnType<typeof createWorker>, delta: number, seconds: number) {
+    const { model: player, shockwave, shockArcs } = worker;
     const ragdolled = view.parts.length > 0;
+    const entangled = Boolean(view.baitedBy);
     const moved = Math.min(1, view.speed / PLAY.moveSpeed);
     const swing = view.swing;
     player.yaw.visible = !ragdolled;
+    for (const hat of player.hats) hat.visible = view.optimization;
     for (const member of player.ragdoll.values()) member.visible = false;
     for (const member of view.parts) {
       const model = player.ragdoll.get(member.limb);
@@ -177,13 +232,26 @@ export function createScene(canvas: HTMLCanvasElement) {
       model.visible = true;
       pose(model, member);
     }
-    if (ragdolled && !ragdollPrevious) {
+    if (ragdolled && !worker.ragdoll && !entangled) {
       effects.unshift({ x: view.position.x, y: view.position.y, z: view.position.z, born: seconds, scale: 0.85 });
     }
-    ragdollPrevious = ragdolled;
+    worker.ragdoll = ragdolled;
+    const wet = entangled && view.position.y < 0.45 && isWater(view.position.x, view.position.z);
+    if (wet && !worker.wet) {
+      worker.splashAt = seconds;
+      worker.splash.position.set(view.position.x, ISLAND.seaY + 0.093, view.position.z);
+      effects.unshift({ x: view.position.x, y: ISLAND.seaY, z: view.position.z, born: seconds, scale: 1.38 });
+    }
+    worker.wet = wet;
+    const splashAge = seconds - worker.splashAt;
+    worker.splash.visible = splashAge < 0.62;
+    worker.splash.scale.setScalar(0.3 + splashAge * 2.8);
+    worker.splash.material.opacity = Math.max(0, 1 - splashAge / 0.62) * 0.92;
+
     player.yaw.position.set(view.position.x, view.position.y, view.position.z);
     player.yaw.rotation.y = view.yaw;
-    walk += delta * 10.5 * moved;
+    worker.walk += delta * 10.5 * moved;
+    const walk = worker.walk;
     const stride = Math.sin(walk);
     const lean = stride * moved * 0.115;
     player.body.position.y = view.grounded ? Math.abs(Math.cos(walk)) * moved * 0.088 : 0;
@@ -196,18 +264,20 @@ export function createScene(canvas: HTMLCanvasElement) {
     leftLeg.rotation.x = view.grounded ? stride * moved * 0.54 : -0.36;
     rightLeg.rotation.x = view.grounded ? -leftLeg.rotation.x : 0.29;
     head.rotation.z = -lean * 0.68;
-    leftArm.rotation.x = view.carrying ? 1.24 : -stride * moved * 0.48;
-    rightArm.rotation.x = view.carrying ? 1.24 : stride * moved * 0.31 + 0.53 - (snapshot.hook.charge * 0.62);
-    player.rod.visible = !view.carrying && swing < 0.07;
-    player.rod.rotation.x = -snapshot.hook.charge * 0.86;
-    player.rod.rotation.y = snapshot.hook.charge * 0.22;
-    player.paddle.visible = swing >= 0.07;
+    const struggle = entangled ? Math.sin(seconds * 16) * 0.26 : 0;
+    leftArm.rotation.x = entangled ? -0.9 + struggle : view.carrying ? 1.24 : -stride * moved * 0.48;
+    leftArm.rotation.z = entangled ? -0.38 : 0;
+    rightArm.rotation.x = entangled ? -0.9 - struggle : view.carrying ? 1.24 : stride * moved * 0.31 + 0.53 - (view.hook.charge * 0.62);
+    player.rod.visible = !entangled && !view.carrying && swing < 0.07;
+    player.rod.rotation.x = -view.hook.charge * 0.86;
+    player.rod.rotation.y = view.hook.charge * 0.22;
+    player.paddle.visible = !entangled && swing >= 0.07;
     const chase = Math.PI * (1.5 * swing - 0.72);
     player.paddle.rotation.set(-0.72, chase, -0.31 - 0.61 * Math.sin(swing * Math.PI));
     if (player.paddle.visible) {
       rightArm.rotation.set(0.88, 0, -0.20);
     } else {
-      rightArm.rotation.z = 0;
+      rightArm.rotation.z = entangled ? 0.38 : 0;
     }
 
     shockwave.visible = swing > 0.12 && swing < 0.79 && !ragdolled;
@@ -217,13 +287,47 @@ export function createScene(canvas: HTMLCanvasElement) {
     for (const [index, streak] of shockArcs.entries()) streak.material.opacity = Math.sin(swing * Math.PI) * (0.5 - index * 0.11);
   }
 
+  function animateCrew(snapshot: SimSnapshot, delta: number, seconds: number) {
+    localPlayerId = snapshot.player.id;
+    crewViews = snapshot.players;
+    const badgeLayout: { x: number; y: number; width: number; height: number }[] = [];
+    const unitsPerPixel = 2 * Math.tan(T.MathUtils.degToRad(camera.fov / 2)) / height;
+    for (const view of crewViews) {
+      let worker = workers.get(view.id);
+      if (!worker) {
+        worker = createWorker(view, workers.size);
+        workers.set(view.id, worker);
+      }
+      animatePlayer(view, worker, delta, seconds);
+      animateHook(view, worker, seconds);
+
+      const badge = worker.badge;
+      badge.setStatus(view.baitedBy ? '当饵中' : view.optimization ? '待优化' : '');
+      badge.resize(unitsPerPixel);
+      const head = view.parts.find(part => part.limb === 'head')?.position;
+      const anchor = head ?? view.position;
+      const headroom = (head ? 0.41 : 0.87) + (view.optimization ? 0.3 : 0);
+      badge.sprite.position.set(anchor.x, Math.max(anchor.y + headroom, 0.37), anchor.z);
+      projection.copy(badge.sprite.position).project(camera);
+      const x = (projection.x + 1) * 0.5 * width;
+      const foot = (1 - projection.y) * 0.5 * height;
+      let y = foot - badge.pixelHeight;
+      while (badgeLayout.some(box => Math.abs(box.x - x) < (box.width + badge.pixelWidth) / 2 + 4
+        && box.y + box.height > y && box.y < y + badge.pixelHeight)) {
+        y -= badge.pixelHeight;
+      }
+      badge.sprite.center.y = (y + badge.pixelHeight - foot) / badge.pixelHeight;
+      badgeLayout.push({ x, y, width: badge.pixelWidth, height: badge.pixelHeight });
+    }
+  }
+
   function animateFish(snapshot: SimSnapshot, seconds: number) {
     const updated = new Set<string>();
     for (const [index, item] of snapshot.fish.entries()) {
       updated.add(item.id);
       let model = fish.get(item.id);
       if (!model) {
-        model = { ...models.fish(world, item.kind), state: item.state };
+        model = { ...models.fish(world, item.kind), state: item.state, carrierId: item.carrierId };
         fish.set(item.id, model);
       }
       pose(model.animal, item);
@@ -235,7 +339,11 @@ export function createScene(canvas: HTMLCanvasElement) {
       if (item.state === 'stunned' && model.state === 'flopping') {
         effects.unshift({ ...item.position, born: seconds, scale: 0.76 });
       }
+      if (item.carrierId && item.carrierId !== model.carrierId && (model.carrierId || model.state === 'thrown')) {
+        effects.unshift({ ...item.position, born: seconds, scale: 0.64 });
+      }
       model.state = item.state;
+      model.carrierId = item.carrierId;
     }
     for (const [id, value] of fish) {
       if (updated.has(id)) continue;
@@ -260,25 +368,36 @@ export function createScene(canvas: HTMLCanvasElement) {
     }
   }
 
-  function animateHook(snapshot: SimSnapshot, seconds: number) {
-    const hook = snapshot.hook.position;
-    const phase = snapshot.hook.phase;
-    crosshair.visible = Boolean(aimPoint && (phase === 'idle' || phase === 'charging'));
+  function animateCrosshair(snapshot: SimSnapshot) {
+    const { phase, charge } = snapshot.hook;
+    crosshair.visible = Boolean(aimPoint && (phase === 'idle' || phase === 'charging' || phase === 'bait'));
     if (aimPoint) {
       const { x, z } = aimPoint;
       crosshair.position.set(x, isWater(x, z) ? ISLAND.seaY + 0.10 : ISLAND.groundY + 0.078, z);
-      const radius = 0.20 + snapshot.hook.charge * 0.23;
+      const hot = aimingAtCrew || phase === 'bait';
+      const radius = (hot ? 0.31 : 0.2) + charge * 0.23;
       crosshair.scale.setScalar(radius);
-      crosshair.material.opacity = 0.53 + snapshot.hook.charge * 0.44;
+      crosshair.material.color.setHex(hot ? 0xff8346 : 0xffedd0);
+      crosshair.material.opacity = (hot ? 0.68 : 0.53) + charge * 0.3;
     }
-    line.visible = Boolean(hook);
-    bobber.visible = Boolean(hook);
-    bite.visible = Boolean(hook && (phase === 'waiting' || phase === 'bite' || phase === 'reeling'));
-    if (!hook) return;
-    player.tip.getWorldPosition(rodTip);
+  }
+
+  function animateHook(view: PlayerView, worker: ReturnType<typeof createWorker>, seconds: number) {
+    const { model, lineColor, line, linePoints, bobber, bite } = worker;
+    const { position: hook, phase, target } = view.hook;
+    const active = Boolean(hook && !view.ragdoll && !view.baitedBy);
+    const tether = target === 'player';
+    line.visible = active;
+    bobber.visible = active;
+    bite.visible = active && (phase === 'waiting' || phase === 'bite' || phase === 'reeling');
+    if (!hook || !active) return;
+    if (tether) line.material.color.setHex(0xff973b);
+    else line.material.color.copy(lineColor);
+    line.material.opacity = tether ? 0.99 : view.bot ? 0.74 : 0.88;
+    model.tip.getWorldPosition(rodTip);
     for (let i = 0; i < 5; i++) {
       const t = i / 4;
-      const sag = Math.sin(t * Math.PI) * (phase === 'reeling' ? 0.11 : 0.40);
+      const sag = Math.sin(t * Math.PI) * (phase === 'reeling' || tether ? 0.11 : 0.40);
       linePoints.setXYZ(i, T.MathUtils.lerp(rodTip.x, hook.x, t), T.MathUtils.lerp(rodTip.y, hook.y + 0.045, t) - sag, T.MathUtils.lerp(rodTip.z, hook.z, t));
     }
     linePoints.needsUpdate = true;
@@ -291,11 +410,12 @@ export function createScene(canvas: HTMLCanvasElement) {
   }
 
   function animateEffects(snapshot: SimSnapshot, seconds: number) {
-    if (snapshot.sold > soldPrevious) {
+    const crewSold = snapshot.players.reduce((sum, view) => sum + view.sold, 0);
+    if (crewSold > soldPrevious) {
       soldAt = seconds;
       effects.unshift({ x: scalePosition.x, y: scalePosition.y, z: scalePosition.z, born: seconds, scale: 1.43 });
     }
-    soldPrevious = snapshot.sold;
+    soldPrevious = crewSold;
     const age = seconds - soldAt;
     saleRing.visible = age < 0.65;
     saleRing.scale.setScalar(1.02 + age * 2.4);
@@ -324,9 +444,9 @@ export function createScene(canvas: HTMLCanvasElement) {
     previous = elapsed;
     frameCamera(snapshot, delta);
     animateIsland(elapsed);
-    animatePlayer(snapshot, delta, elapsed);
+    animateCrew(snapshot, delta, elapsed);
     animateFish(snapshot, elapsed);
-    animateHook(snapshot, elapsed);
+    animateCrosshair(snapshot);
     animateEffects(snapshot, elapsed);
     renderer.render(world, camera);
   }
@@ -335,6 +455,7 @@ export function createScene(canvas: HTMLCanvasElement) {
     const geometries = new Set<T.BufferGeometry>();
     const materials = new Set<T.Material>();
     world.traverse(object => {
+      if (object instanceof T.Sprite) materials.add(object.material);
       if (!(object instanceof T.Mesh || object instanceof T.Line)) return;
       geometries.add(object.geometry);
       const item = object.material;
@@ -345,6 +466,7 @@ export function createScene(canvas: HTMLCanvasElement) {
       if ('map' in material && material.map instanceof T.Texture) material.map.dispose();
       material.dispose();
     }
+    key.shadow.dispose();
     renderer.dispose();
   }
 

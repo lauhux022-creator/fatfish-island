@@ -31,7 +31,15 @@ export function createSound() {
       tone(880, 880, 0.22, 0.08, 'triangle', 0.08);
       tone(1318.51, 1318.51, 0.28, 0.06, 'triangle', 0.16);
     }
+    if (after.result && after.result.day !== before.result?.day) {
+      tone(523.25, 523.25, 0.26, 0.07, 'triangle');
+      tone(392, 392, 0.3, 0.07, 'triangle', 0.18);
+    }
     if (after.hook.phase !== before.hook.phase) {
+      if (after.hook.phase === 'bait') {
+        tone(160, 310, 0.11, 0.08, 'triangle');
+        tone(375, 610, 0.17, 0.07, 'triangle', 0.11);
+      }
       if (after.hook.phase === 'flying') tone(300, 670, 0.17, 0.08, 'sine');
       if (after.hook.phase === 'waiting') tone(230, 65, 0.14, 0.09, 'sine');
       if (after.hook.phase === 'bite') {

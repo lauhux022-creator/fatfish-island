@@ -44,6 +44,17 @@ export interface RagdollPart extends Pose {
 }
 
 export interface PlayerView extends Pose {
+  id: string;
+  name: string;
+  bot: boolean;
+  cash: number;
+  sold: number;
+  shiftCash: number;
+  shiftSold: number;
+  optimization: boolean;
+  /** ID of the teammate who hooked or launched this worker. */
+  baitedBy: string | null;
+  hook: HookView;
   yaw: number;
   speed: number;
   grounded: boolean;
@@ -55,14 +66,15 @@ export interface PlayerView extends Pose {
   carrying: string | null;
 }
 
-export type HookPhase = 'idle' | 'charging' | 'flying' | 'waiting' | 'bite' | 'reeling';
+export type HookPhase = 'idle' | 'charging' | 'flying' | 'waiting' | 'bite' | 'reeling' | 'bait';
 
 export interface HookView {
   phase: HookPhase;
   position: Vec3 | null;
   charge: number;
   progress: number;
-  target: 'fish' | 'crate' | null;
+  target: 'fish' | 'crate' | 'player' | null;
+  targetId: string | null;
 }
 
 export type FishKind = 'sardine' | 'puffer' | 'grouper';
@@ -73,6 +85,9 @@ export interface FishView extends Pose {
   kind: FishKind;
   state: FishState;
   multiplier: number;
+  caughtBy: string;
+  carrierId: string | null;
+  baitPlayerId: string | null;
 }
 
 export interface CrateView extends Pose {
@@ -86,12 +101,32 @@ export interface SimNotice {
   tone: 'info' | 'good' | 'bad';
 }
 
+export interface ShiftEntry {
+  id: string;
+  name: string;
+  bot: boolean;
+  rank: number;
+  revenue: number;
+  sold: number;
+  bonus: number;
+  optimization: boolean;
+}
+
+export interface ShiftResult {
+  day: number;
+  ranking: ShiftEntry[];
+  showUntil: number;
+}
+
 export interface SimSnapshot {
   tick: number;
   time: number;
   day: number;
   seed: string;
   player: PlayerView;
+  players: PlayerView[];
+  shiftRemaining: number;
+  result: ShiftResult | null;
   hook: HookView;
   fish: FishView[];
   crates: CrateView[];

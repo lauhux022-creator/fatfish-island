@@ -21,6 +21,7 @@ const seed = params.get('seed')?.trim().slice(0, 80) || crypto.getRandomValues(n
 const dayParam = Number.parseInt(params.get('day') ?? '1', 10);
 const day = Number.isFinite(dayParam) ? Math.min(999, Math.max(1, dayParam)) : 1;
 const debug = params.get('debug') === '1';
+const shiftSeconds = debug && params.has('shiftSeconds') ? Number(params.get('shiftSeconds')) : undefined;
 
 const app = document.querySelector<HTMLElement>('#app')!;
 const hud = createHud(app, { version: __GAME_VERSION__, commit: __COMMIT_SHA__, seed, debug });
@@ -31,7 +32,7 @@ async function startGame() {
     import('./scene'),
   ]);
   const scene = createScene(hud.canvas);
-  const sim = await createSimulation({ seed, day });
+  const sim = await createSimulation({ seed, day, shiftSeconds });
   const sound = createSound();
   const events = new AbortController();
   const options = { signal: events.signal };

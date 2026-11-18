@@ -1,7 +1,8 @@
 import * as T from 'three';
 import { FISH } from '../../shared/sim/config';
 import type { FishKind, RagdollLimb } from '../../shared/sim/types';
-import { palette as p, type GeometryKit } from './geometry';
+import { crewColor } from '../crew-colors';
+import { label, palette as p, type GeometryKit } from './geometry';
 
 const fishColors = {
   sardine: { back: 0x529eb2, belly: 0xc4ead2, fin: 0x2a6b79 },
@@ -19,10 +20,24 @@ function finGeometry(points: number[]) {
   return new T.ExtrudeGeometry(shape, { depth: 0.035, bevelEnabled: false });
 }
 
+function uniform(id: string) {
+  const color = new T.Color(crewColor(id));
+  return {
+    bib: color.getHex(),
+    pocket: color.clone().multiplyScalar(0.72).getHex(),
+    straps: color.clone().lerp(new T.Color(0xf5d59a), 0.13).getHex(),
+    helmet: id === 'player' ? 0xfabd4d : color.clone().lerp(new T.Color(0xffdab5), 0.42).getHex(),
+    brim: id === 'player' ? 0xe88736 : color.clone().multiplyScalar(0.8).getHex(),
+  };
+}
+
 export function createModels(kit: GeometryKit) {
   const tailFin = finGeometry([0, 0, -0.26, 0.18, -0.3, 0.03, -0.24, -0.05, -0.29, -0.17]);
   const dorsalFin = finGeometry([-0.20, 0.0, -0.19, 0.13, -0.03, 0.21, 0.10, 0.0]);
   const sideFin = finGeometry([0.07, 0.04, -0.19, 0.03, -0.11, -0.11, 0.01, -0.07]);
+  const warningCone = new T.ConeGeometry(1, 1, 7);
+  const warningDecal = new T.Group();
+  label(warningDecal, '待优化', 0.57, 0.225, 0, 0, 0);
 
   function fish(parent: T.Object3D, kind: FishKind) {
     const { back, belly, fin } = fishColors[kind];
@@ -84,16 +99,16 @@ export function createModels(kit: GeometryKit) {
     return object;
   }
 
-  function shell(part: RagdollLimb, parent: T.Object3D) {
+  function shell(part: RagdollLimb, parent: T.Object3D, colors: ReturnType<typeof uniform>) {
     const object = kit.group(parent);
     if (part === 'torso') {
       kit.orb(object, 0xeaced0, 0, 0.078, 0.015, 0.302, 0.28, 0.226);
-      kit.box(object, 0x2c696a, 0, -0.078, 0.016, 0.49, 0.27, 0.383);
-      kit.box(object, 0x2a6865, 0, -0.045, -0.192, 0.35, 0.35, 0.08);
-      kit.box(object, 0x28514c, 0, -0.114, 0.244, 0.29, 0.170, 0.087);
+      kit.box(object, colors.bib, 0, -0.078, 0.016, 0.49, 0.27, 0.383);
+      kit.box(object, colors.bib, 0, -0.045, -0.192, 0.35, 0.35, 0.08);
+      kit.box(object, colors.pocket, 0, -0.114, 0.244, 0.29, 0.170, 0.087);
       kit.box(object, p.mustard, 0, -0.114, 0.295, 0.18, 0.073, 0.029);
       for (const side of [-1, 1]) {
-        kit.box(object, 0x376c68, side * 0.147, 0.141, 0.017, 0.08, 0.129, 0.45);
+        kit.box(object, colors.straps, side * 0.147, 0.141, 0.017, 0.08, 0.129, 0.45);
         kit.orb(object, p.mustard, side * 0.14, 0.047, -0.239, 0.035, 0.035, 0.022);
       }
     } else if (part === 'head') {
@@ -102,25 +117,45 @@ export function createModels(kit: GeometryKit) {
       for (const side of [-1, 1]) {
         kit.orb(object, p.ink, side * 0.082, 0.012, -0.172, 0.025, 0.038, 0.016);
       }
-      kit.orb(object, 0xfabd4d, 0, 0.128, 0, 0.26, 0.170, 0.225);
-      kit.tube(object, 0xe88736, 0, 0.087, -0.019, 0.28, 0.043, 0.253);
-      kit.box(object, 0xffce56, 0, 0.245, 0, 0.08, 0.047, 0.236);
+      kit.orb(object, colors.helmet, 0, 0.128, 0, 0.26, 0.170, 0.225);
+      kit.tube(object, colors.brim, 0, 0.087, -0.019, 0.28, 0.043, 0.253);
+      kit.box(object, colors.helmet, 0, 0.245, 0, 0.08, 0.047, 0.236);
       kit.box(object, 0xf7ead0, 0, 0.129, 0.204, 0.09, 0.065, 0.02);
     } else if (part === 'leftArm' || part === 'rightArm') {
       kit.orb(object, 0xf6d3af, 0, 0.075, 0, 0.116, 0.151, 0.127);
       kit.orb(object, 0xeba872, 0, -0.139, 0, 0.088, 0.17, 0.093);
       kit.orb(object, 0xe79a60, 0, -0.236, -0.012, 0.106, 0.095, 0.094);
     } else {
-      kit.orb(object, 0x2d716b, 0, -0.01, 0.032, 0.132, 0.205, 0.140);
+      kit.orb(object, colors.bib, 0, -0.01, 0.032, 0.132, 0.205, 0.140);
       kit.box(object, p.ink, 0, -0.194, -0.044, 0.242, 0.13, 0.37);
       kit.box(object, 0x40554a, 0, -0.247, -0.045, 0.243, 0.028, 0.371);
+    }
+    for (const mesh of object.children) {
+      if (Math.max(mesh.scale.x, mesh.scale.y, mesh.scale.z) < 0.2) mesh.castShadow = false;
     }
     return object;
   }
 
-  function worker(parent: T.Object3D) {
+  function optimizationHat(head: T.Group) {
+    const hat = kit.group(head, 0.02, 0.21, 0.01);
+    hat.rotation.z = -0.12;
+    const cone = kit.mesh(hat, warningCone, 0xf18334, 0, 0.30, 0);
+    cone.scale.set(0.295, 0.59, 0.27);
+    kit.tube(hat, 0xffcc69, 0, 0.073, 0, 0.28, 0.047, 0.259);
+    for (const side of [-1, 1]) {
+      const decal = warningDecal.clone();
+      decal.position.set(0, 0.16, side * 0.243);
+      decal.rotation.y = side < 0 ? Math.PI : 0;
+      hat.add(decal);
+    }
+    hat.visible = false;
+    return hat;
+  }
+
+  function worker(parent: T.Object3D, id: string) {
     const yaw = kit.group(parent);
     const body = kit.group(yaw);
+    const colors = uniform(id);
     const offsets: Record<RagdollLimb, [number, number, number]> = {
       torso: [0, 0, 0],
       head: [0, 0.48, -0.015],
@@ -130,10 +165,11 @@ export function createModels(kit: GeometryKit) {
       rightLeg: [0.14, -0.395, 0],
     };
     const limbs = Object.keys(offsets) as RagdollLimb[];
-    const standing = new Map(limbs.map(name => [name, shell(name, body)]));
-    const ragdoll = new Map(limbs.map(name => [name, shell(name, parent)]));
+    const standing = new Map(limbs.map(name => [name, shell(name, body, colors)]));
+    const ragdoll = new Map(limbs.map(name => [name, shell(name, parent, colors)]));
     for (const [name, member] of standing) member.position.set(...offsets[name]);
     for (const member of ragdoll.values()) member.visible = false;
+    const hats = [optimizationHat(standing.get('head')!), optimizationHat(ragdoll.get('head')!)];
 
     const rod = kit.group(body, 0.40, -0.02, -0.34);
     kit.beam(rod, 0x854d32, new T.Vector3(0, -0.13, 0.20), new T.Vector3(0.12, 0.54, -0.74), 0.033);
@@ -146,7 +182,7 @@ export function createModels(kit: GeometryKit) {
     kit.orb(paddle, p.mustard, 0, 0.60, 0, 0.162, 0.282, 0.049);
     kit.box(paddle, p.rust, 0, 0.73, 0, 0.196, 0.062, 0.087);
     paddle.visible = false;
-    return { yaw, body, standing, ragdoll, rod, tip, paddle };
+    return { yaw, body, standing, ragdoll, rod, tip, paddle, hats };
   }
 
   return { fish, crate, worker };
