@@ -24,7 +24,10 @@ const debug = params.get('debug') === '1';
 const shiftSeconds = debug && params.has('shiftSeconds') ? Number(params.get('shiftSeconds')) : undefined;
 
 const app = document.querySelector<HTMLElement>('#app')!;
-const hud = createHud(app, { version: __GAME_VERSION__, commit: __COMMIT_SHA__, seed, debug });
+let queuedChat: string | undefined;
+const hud = createHud(app, { version: __GAME_VERSION__, commit: __COMMIT_SHA__, seed, debug }, (text) => {
+  queuedChat = text;
+});
 
 async function startGame() {
   const [{ createSimulation }, { createScene }] = await Promise.all([
@@ -65,13 +68,17 @@ async function startGame() {
 
   addEventListener('keydown', (event) => {
     const target = event.target;
-    if (event.ctrlKey || event.metaKey || event.altKey || event.defaultPrevented) return;
+    if (event.ctrlKey || event.metaKey || event.altKey || event.defaultPrevented || event.isComposing) return;
     if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable]')) return;
     if (snapshot.shiftPaused) {
       if (event.code === 'Enter' || event.code === 'NumpadEnter') {
         event.preventDefault();
         if (!event.repeat) input.continuePressed = true;
       }
+      return;
+    }
+    if (event.code === 'KeyT' && !event.repeat && hud.focusChat()) {
+      event.preventDefault();
       return;
     }
     if (target instanceof HTMLElement && target.closest('button, summary') && event.code === 'Space') return;
@@ -88,6 +95,23 @@ async function startGame() {
   }, options);
 
   addEventListener('keyup', (event) => pressed.delete(event.code), options);
+  app.addEventListener('focusin', (event) => {
+    if (!(event.target instanceof Element) || !event.target.matches('[data-boss-input]')) return;
+    pressed.clear();
+    for (const [pointerId, control] of touch) {
+      if (control !== 'cast') touch.delete(pointerId);
+    }
+    input.swingPressed = false;
+    input.interactPressed = false;
+    input.jumpPressed = false;
+  }, options);
+  function resizeComposer() {
+    const viewport = window.visualViewport;
+    const keyboardGap = viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0;
+    app.style.setProperty('--chat-keyboard-gap', `${Math.round(keyboardGap)}px`);
+  }
+  window.visualViewport?.addEventListener('resize', resizeComposer, options);
+  window.visualViewport?.addEventListener('scroll', resizeComposer, options);
   addEventListener('blur', () => {
     pressed.clear();
     touch.clear();
@@ -102,7 +126,8 @@ async function startGame() {
   hud.canvas.addEventListener('pointerdown', (event) => {
     if (snapshot.shiftPaused) return;
     sound.unlock();
-    if (document.activeElement instanceof HTMLButtonElement) document.activeElement.blur();
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && focused.matches('button, [data-boss-input]')) focused.blur();
     aimPointer = { x: event.clientX, y: event.clientY };
     if (event.pointerType === 'touch') {
       input.aim = scene.aim(event.clientX, event.clientY);
@@ -180,17 +205,15 @@ async function startGame() {
   function frame(now: number) {
     const elapsedMs = Math.min(now - previous, 100);
     previous = now;
-    if (!snapshot.shiftPaused) {
-      accumulated += elapsedMs;
-      sceneElapsed += elapsedMs / 1000;
-    } else if (input.continuePressed) {
-      accumulated = stepMs;
-    }
+    accumulated += elapsedMs;
+    if (!snapshot.shiftPaused) sceneElapsed += elapsedMs / 1000;
 
     while (accumulated >= stepMs) {
       input.moveX = direction('KeyD', 'ArrowRight', 'right') - direction('KeyA', 'ArrowLeft', 'left');
       input.moveZ = direction('KeyS', 'ArrowDown', 'down') - direction('KeyW', 'ArrowUp', 'up');
-      if (aimPointer) input.aim = scene.aim(aimPointer.x, aimPointer.y);
+      if (!snapshot.shiftPaused && aimPointer) input.aim = scene.aim(aimPointer.x, aimPointer.y);
+      input.chat = queuedChat;
+      queuedChat = undefined;
       sim.step(input);
       const next = sim.snapshot();
       sound.update(snapshot, next);
@@ -211,11 +234,13 @@ async function startGame() {
       accumulated = pauseChanged ? 0 : accumulated - stepMs;
     }
 
-    scene.render(snapshot, sceneElapsed);
     if (snapshot !== lastUiSnapshot) {
       hud.update(snapshot);
       lastUiSnapshot = snapshot;
     }
+    const speaking = hud.isBossSpeaking();
+    scene.render(snapshot, sceneElapsed, speaking);
+    if (speaking) hud.setBossAnchor(scene.projectBossSpeech());
     raf = requestAnimationFrame(frame);
   }
 

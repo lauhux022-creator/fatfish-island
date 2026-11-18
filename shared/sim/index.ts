@@ -1,9 +1,13 @@
 import RAPIER, { type ColliderDesc, type RigidBody } from '@dimforge/rapier3d-compat';
+import { classifyFishChat, normalizePlayerChat } from '../fish-brain/chat';
+import { MockBrain } from '../fish-brain/mock';
+import { FishBrainRuntime, type FishRequest } from '../fish-brain/runtime';
+import type { FishBrain, FishBrainOutput, FishEvent, FishObservedEvent } from '../fish-brain/types';
 import { createBotController } from './bots';
 import { seededRandom } from './random';
-import { CREW, FISH, FISHING, ISLAND, PLAY, SHIFT, STEP_SECONDS, TEAM_DAILY_KPI, TICKS_PER_SECOND } from './config';
+import { BOSS, CREW, FISH, FISHING, ISLAND, PLAY, SHIFT, STEP_SECONDS, TEAM_DAILY_KPI, TICKS_PER_SECOND } from './config';
 import type {
-  CrateView, FishKind, FishState, HookPhase, HookView, PlayerMetrics, PlayerView, Pose, RagdollLimb, Rotation,
+  BossLine, CrateView, FishKind, FishState, HookPhase, HookView, PlayerMetrics, PlayerView, Pose, RagdollLimb, Rotation,
   ShiftResult, SimInput, SimNotice, SimSnapshot, Vec3,
 } from './types';
 
@@ -11,6 +15,7 @@ interface SimulationOptions {
   seed?: string;
   day?: number;
   shiftSeconds?: number;
+  brain?: FishBrain;
 }
 
 interface Fish {
@@ -92,6 +97,13 @@ interface Actor {
   sold: number;
   shiftCash: number;
   shiftSold: number;
+  shiftBossBonus: number;
+  shiftBossFine: number;
+  favor: number;
+  memory: string[];
+  giftedBait: boolean;
+  swallowed: boolean;
+  lastSwallowedDay: number;
   metrics: ActorMetrics;
   optimization: boolean;
 }
@@ -167,6 +179,7 @@ class IslandSimulation {
   private readonly random: () => number;
   private readonly bots: ReturnType<typeof createBotController>;
   private readonly shiftLength: number;
+  private readonly boss: FishBrainRuntime;
   private day: number;
   private shiftEnd: number;
   private shiftPaused = false;
@@ -175,12 +188,18 @@ class IslandSimulation {
   private nextEntityId = 0;
   private notice: SimNotice | null = null;
   private noticeId = 0;
+  private bossLine: BossLine | null = null;
+  private bossInterview: BossLine | null = null;
+  private salePricePercent = 100;
+  private bossKpi: number | null = null;
+  private rewardCrates = 0;
 
-  constructor({ seed = 'dock-shift', day = 1, shiftSeconds = PLAY.daySeconds }: SimulationOptions) {
+  constructor({ seed = 'dock-shift', day = 1, shiftSeconds = PLAY.daySeconds, brain = new MockBrain() }: SimulationOptions) {
     this.seed = seed;
     this.day = Number.isFinite(day) ? Math.max(1, Math.trunc(day)) : 1;
     this.random = seededRandom(`${seed}:world`);
     this.bots = createBotController(seed);
+    this.boss = new FishBrainRuntime(brain);
     const seconds = Number.isFinite(shiftSeconds) ? clamp(shiftSeconds, SHIFT.shortestSeconds, PLAY.daySeconds) : PLAY.daySeconds;
     this.shiftLength = Math.round(seconds * TICKS_PER_SECOND);
     this.shiftEnd = this.shiftLength;
@@ -200,13 +219,17 @@ class IslandSimulation {
       this.makeCrate('supply-crate', ISLAND.supplyCrate, 'floating', 0.43),
       this.makeCrate('training-crate', ISLAND.trainingCrate, 'loose', 0.52),
     ];
+    this.requestBoss('shift_start', null, '新一班开工');
   }
 
   step(input: SimInput, overrides: Readonly<Record<string, SimInput>> = {}) {
+    this.receiveBossChat(this.actors[0], input.chat);
     if (this.shiftPaused) {
       if (input.continuePressed) this.startNextShift();
+      this.advanceBoss();
       return;
     }
+    this.advanceBoss();
     const previous = this.actors.some((actor) => actor.bot && !overrides[actor.id]) ? this.snapshot() : null;
     const inputs = this.actors.map((actor, index) => {
       if (!actor.bot) return input;
@@ -257,6 +280,16 @@ class IslandSimulation {
         fishIncidents: this.affectedFish.size,
       },
       result: this.result && { ...this.result, ranking: this.result.ranking.map((entry) => ({ ...entry })) },
+      boss: {
+        line: this.bossLine && this.bossLine.day === this.day ? { ...this.bossLine } : null,
+        interview: this.bossInterview && this.bossInterview.day === this.day ? { ...this.bossInterview } : null,
+        pending: this.boss.pending,
+        cooldownSeconds: this.boss.cooldownSeconds,
+        calls: this.boss.calls,
+        favor: player.favor,
+        memory: player.memory,
+        priceMultiplier: this.salePricePercent / 100,
+      },
       fish: this.fish.map(({ id, body, kind, state, multiplier, caughtBy, carrierId, baitPlayerId, lastTouch, grabAgainAt }) =>
         ({
           id, kind, state, multiplier, caughtBy, carrierId, baitPlayerId, lastTouch, ...pose(body),
@@ -271,6 +304,7 @@ class IslandSimulation {
   }
 
   dispose() {
+    this.boss.dispose();
     this.world.free();
   }
 
@@ -279,9 +313,169 @@ class IslandSimulation {
   }
 
   private get teamTarget() {
+    return this.bossKpi ?? this.baseTeamTarget;
+  }
+
+  private get baseTeamTarget() {
     const target = TEAM_DAILY_KPI[Math.min(this.day - 1, TEAM_DAILY_KPI.length - 1)];
     // Short shifts exist for reproducing the same rules via the debug override.
     return Math.round(target * this.shiftLength / (PLAY.daySeconds * TICKS_PER_SECOND));
+  }
+
+  private requestBoss(trigger: FishEvent['trigger'], actor: Actor | null, summary: string, amount?: number) {
+    this.boss.request({ trigger, day: this.day, time: this.time, actorId: actor?.id ?? null, summary, amount });
+  }
+
+  private observeCrew(trigger: 'theft' | 'friendly_hit', actor: Actor, other: Actor, summary: string) {
+    const event: FishObservedEvent = {
+      trigger, day: this.day, time: this.time, actorId: actor.id, relatedId: other.id, summary,
+    };
+    this.boss.observe(event);
+  }
+
+  private receiveBossChat(actor: Actor, value: unknown) {
+    const text = normalizePlayerChat(value);
+    if (!text) return;
+    this.boss.request({
+      trigger: 'chat', day: this.day, time: this.time, actorId: actor.id, summary: `${actor.name}找老板谈话`,
+    }, { authorId: actor.id, text });
+  }
+
+  private advanceBoss() {
+    this.boss.advance(this.day, () => ({
+      players: this.actors.map(({ id, name, cash, shiftCash, shiftSold, favor, memory }) =>
+        ({ id, name, cash, shiftCash, shiftSold, favor, memory: memory.join('，') })),
+      teamTarget: this.teamTarget,
+      teamRevenue: this.actors.reduce((sum, worker) => sum + worker.shiftCash, 0),
+      priceMultiplier: this.salePricePercent / 100,
+    }), (request, response) => this.finishBossRequest(request, response));
+  }
+
+  private finishBossRequest(request: FishRequest, response: FishBrainOutput) {
+    const decision = this.applyBossAction(request, response);
+    const { event, message } = request;
+    const speaker = message && this.actors.find(({ id }) => id === message.authorId);
+    if (speaker && message) this.rememberConversation(speaker, message.text, decision);
+    const line = { ...decision, id: this.boss.calls, trigger: event.trigger, day: event.day };
+    this.bossLine = line;
+    if (event.trigger === 'shift_end') this.bossInterview = line;
+  }
+
+  private remember(actor: Actor, entry: string, change = 0) {
+    actor.favor = clamp(actor.favor + change, BOSS.minFavor, BOSS.maxFavor);
+    const previous = actor.memory.indexOf(entry);
+    if (previous >= 0) actor.memory.splice(previous, 1);
+    actor.memory.push(entry);
+    if (actor.memory.length > BOSS.maxMemoryEntries) actor.memory.shift();
+  }
+
+  private rememberConversation(speaker: Actor, text: string, response: FishBrainOutput) {
+    switch (classifyFishChat(text)) {
+      case 'praise':
+        this.remember(speaker, '夸过老板', BOSS.praiseFavor);
+        break;
+      case 'bribe':
+        if (response.action === 'fine' && response.target === speaker.id && response.amount > 0) {
+          this.remember(speaker, '请过老板喝茶', BOSS.bribeFavor);
+        } else this.remember(speaker, '提过请喝茶');
+        break;
+      case 'complaint': {
+        const fined = response.action === 'fine' && this.actors.find(({ id }) => id === response.target);
+        if (fined === speaker) this.remember(speaker, '告状反被记账', BOSS.backfireFavor);
+        else if (fined) {
+          this.remember(speaker, `告过${fined.name}的状`, BOSS.complaintFavor);
+          this.remember(fined, '被同事告过状', BOSS.blamedFavor);
+        } else this.remember(speaker, '提过告状');
+        break;
+      }
+      case 'bargain':
+        this.remember(speaker, '和老板谈过鱼价');
+        break;
+      default:
+        this.remember(speaker, '来找过老板');
+    }
+  }
+
+  private applyBossAction(request: FishRequest, response: FishBrainOutput): FishBrainOutput & { effect?: string } {
+    const { action, target, amount } = response;
+    const actor = target && this.actors.find(({ id }) => id === target);
+    const rejected = (): FishBrainOutput => ({ say: '这笔账我先记着。', emotion: 'calm', action: 'none', target: null, amount: 0 });
+    switch (action) {
+      case 'none':
+        return response;
+      case 'bonus':
+      case 'fine': {
+        if (!actor || amount < 0) return rejected();
+        const fine = action === 'fine';
+        const cap = fine
+          ? Math.min(actor.cash, Math.max(0, Math.round(actor.shiftCash * BOSS.maxFineRate) - actor.shiftBossFine))
+          : Math.max(0, Math.round(actor.shiftCash * BOSS.maxBonusRate) - actor.shiftBossBonus);
+        const applied = clamp(Math.round(amount), 0, cap);
+        const complaint = request.message && classifyFishChat(request.message.text) === 'complaint';
+        if (!applied && !(fine && complaint && amount === 0)) return rejected();
+        actor.cash += fine ? -applied : applied;
+        if (fine) actor.shiftBossFine += applied;
+        else actor.shiftBossBonus += applied;
+        const entry = this.shiftPaused && this.result?.ranking.find(({ id }) => id === actor.id);
+        if (entry) {
+          if (fine) entry.fine += applied;
+          else entry.bonus += applied;
+        }
+        return {
+          ...response,
+          amount: applied,
+          effect: applied ? `${actor.name} ${fine ? '扣款' : '奖金'} ¥${applied}` : `${actor.name}被老板记了一笔`,
+        };
+      }
+      case 'set_kpi': {
+        if (target !== null || this.shiftPaused) return rejected();
+        const min = Math.ceil(this.baseTeamTarget * BOSS.kpiRange[0]);
+        const max = Math.floor(this.baseTeamTarget * BOSS.kpiRange[1]);
+        this.bossKpi = clamp(Math.round(amount), min, max);
+        return { ...response, amount: this.bossKpi, effect: `本班团队指标 ¥${this.bossKpi}` };
+      }
+      case 'price_change': {
+        if (target !== null || this.shiftPaused) return rejected();
+        const before = this.salePricePercent;
+        const points = clamp(Math.round(amount), ...BOSS.priceStep);
+        this.salePricePercent = clamp(before + points, ...BOSS.priceRange);
+        return {
+          ...response, amount: this.salePricePercent - before,
+          effect: `后续收鱼价 ×${(this.salePricePercent / 100).toFixed(2)}`,
+        };
+      }
+      case 'spawn_event': {
+        if (target !== 'crate' || this.shiftPaused || amount < 0.5) return rejected();
+        const spawned = this.spawnBossCrates(Math.round(amount));
+        return spawned ? { ...response, amount: spawned, effect: `补给木箱 ×${spawned} 已送到岸后` } : rejected();
+      }
+      case 'gift_item':
+        if (!actor || actor.giftedBait || amount < 0.5) return rejected();
+        actor.giftedBait = true;
+        return { ...response, amount: 1, effect: `${actor.name}获得一份加急鱼饵` };
+      case 'eat_player':
+        if (!actor || this.shiftPaused || actor.ragdoll.length || actor.lastSwallowedDay === this.day || amount < 0.5) {
+          return rejected();
+        }
+        this.startRagdoll(actor, null, launchVector(actor.body.translation(), BOSS.swallowLanding, BOSS.swallowFlightSeconds));
+        actor.swallowed = true;
+        actor.lastSwallowedDay = this.day;
+        this.remember(actor, '被老板吞过又吐回岸上');
+        this.requestBoss('death', actor, `${actor.name}被大肥鱼吞下`);
+        return { ...response, amount: 1, effect: `${actor.name}被大肥鱼吞走了` };
+    }
+  }
+
+  private spawnBossCrates(wanted: number) {
+    const available = BOSS.rewardCrates.filter((position) =>
+      !this.actors.some((worker) => distance(worker.ragdoll[0]?.body.translation() ?? worker.body.translation(), position) < 1.3)
+      && !this.crates.some(({ body }) => distance(body.translation(), position) < 1),
+    );
+    const amount = Math.min(wanted, available.length, BOSS.rewardCrates.length - this.rewardCrates);
+    for (const position of available.slice(0, amount)) {
+      this.crates.push(this.makeCrate(`boss-supply-${++this.rewardCrates}`, position, 'loose', 0.43));
+    }
+    return amount;
   }
 
   private announce(actor: Actor, text: string, tone: SimNotice['tone'] = 'info', other?: Actor, cue?: SimNotice['cue']) {
@@ -300,6 +494,7 @@ class IslandSimulation {
       yaw: 0, aim: { x: 0, z: -1 }, groundContact: true, moveSpeed: 0, swingUntil: 0,
       ragdoll: [], recoverTick: 0, nextTripAt: 0, carrying: null, hook: newHook(),
       baitedBy: null, cash: 0, sold: 0, shiftCash: 0, shiftSold: 0, metrics: newActorMetrics(), optimization: false,
+      shiftBossBonus: 0, shiftBossFine: 0, favor: 0, memory: [], giftedBait: false, swallowed: false, lastSwallowedDay: 0,
     };
   }
 
@@ -312,6 +507,9 @@ class IslandSimulation {
     return {
       ...pose(body),
       id, name, bot, cash, sold, shiftCash, shiftSold, optimization, yaw,
+      favor: actor.favor,
+      memory: actor.memory.join('，'),
+      giftedBait: actor.giftedBait,
       metrics: { ...metrics, fishIncidents: fishIncidents.size, interference: metrics.paddleHits + metrics.fishStolen },
       baitedBy: actor.baitedBy?.id ?? null,
       rotation: ragdoll.length ? body.rotation() : yawRotation(yaw),
@@ -350,6 +548,7 @@ class IslandSimulation {
       actor.cash = Math.max(0, actor.cash + bonus - fine);
     }
     this.shiftPaused = true;
+    this.requestBoss('shift_end', this.actors[0], '白班交班，排名已结算');
   }
 
   private startNextShift() {
@@ -358,6 +557,8 @@ class IslandSimulation {
       actor.optimization = actor.id === lowest;
       actor.shiftCash = 0;
       actor.shiftSold = 0;
+      actor.shiftBossBonus = 0;
+      actor.shiftBossFine = 0;
       actor.metrics = newActorMetrics();
       if (actor.hook.phase === 'charging') this.clearHook(actor);
     }
@@ -368,6 +569,10 @@ class IslandSimulation {
     this.day += 1;
     this.shiftEnd = this.tick + this.shiftLength;
     this.shiftPaused = false;
+    this.bossKpi = null;
+    this.salePricePercent = 100;
+    this.boss.startDay(this.day);
+    this.requestBoss('shift_start', null, '新一班开工');
   }
 
   private makeCrate(id: string, origin: Vec3, state: CrateView['state'], halfSize: number): Crate {
@@ -540,7 +745,8 @@ class IslandSimulation {
       hook.phase = 'waiting';
       const nearSpot = FISHING.goodSpots.some((spot) => distance(spot, position) <= FISHING.goodSpotRadius);
       hook.deadline = this.time + FISHING.biteMin + actor.random() * (FISHING.biteMax - FISHING.biteMin)
-        + (nearSpot ? 0 : FISHING.offSpotDelay);
+        + (nearSpot ? 0 : FISHING.offSpotDelay) - (actor.giftedBait ? BOSS.giftBiteReduction : 0);
+      actor.giftedBait = false;
     } else if (landedOnBeach || this.time > hook.deadline) {
       this.clearHook(actor);
       this.announce(actor, '空钩！瞄准岸外的海面', 'bad');
@@ -738,6 +944,7 @@ class IslandSimulation {
         y: 3.8,
         z: (point.z - position.z) / length * PLAY.friendlyKnockback,
       });
+      this.observeCrew('friendly_hit', actor, teammate, `${actor.name}挥桨拍飞了${teammate.name}`);
       this.announce(actor, actor.bot ? `${actor.name}把你一桨拍飞！` : `一桨拍飞了${teammate.name}！`, 'bad', teammate);
       return;
     }
@@ -811,7 +1018,10 @@ class IslandSimulation {
       this.transferredFish.add(item.id);
       this.affectedFish.add(item.id);
       formerOwner.metrics.fishIncidents.add(item.id);
-      if (victim || interceptorVictim) formerOwner.metrics.fishStolen += 1;
+      if (victim || interceptorVictim) {
+        formerOwner.metrics.fishStolen += 1;
+        this.observeCrew('theft', actor, formerOwner, `${actor.name}从${formerOwner.name}那里${victim ? '抢鱼' : '截胡'}`);
+      }
     }
     item.carrierId = actor.id;
     item.thrownBy = null;
@@ -906,7 +1116,7 @@ class IslandSimulation {
       if (fish.state === 'thrown' && fish.lastTouch && distance(point, ISLAND.scale) <= ISLAND.scale.radius
         && Math.abs(point.y - ISLAND.scale.y) < 0.37) {
         const baitMultiplier = fish.baitPlayerId ? FISHING.baitPriceMultiplier : 1;
-        const amount = Math.round(FISH[fish.kind].price * fish.multiplier * baitMultiplier);
+        const amount = Math.round(FISH[fish.kind].price * fish.multiplier * baitMultiplier * this.salePricePercent / 100);
         const worker = this.actors.find(({ id }) => id === fish.lastTouch);
         if (worker) {
           worker.cash += amount;
@@ -915,6 +1125,7 @@ class IslandSimulation {
           worker.shiftSold += 1;
           const bait = fish.baitPlayerId ? ` · 活饵 ×${baitMultiplier}` : '';
           this.announce(worker, `入账 ¥${amount} · ${FISH[fish.kind].name} ×${fish.multiplier.toFixed(2)}${bait}`, 'good');
+          this.requestBoss('sale', worker, `${worker.name}卖出${FISH[fish.kind].name}`, amount);
         }
         this.removeFish(fish);
       } else if (fish.state !== 'hooked' && fish.state !== 'carried' && fish.state !== 'swimming'
@@ -941,6 +1152,8 @@ class IslandSimulation {
       if (!actor.ragdoll.length && actor.body.translation().y < ISLAND.seaY - 0.27) {
         this.startRagdoll(actor, null);
         this.announce(actor, '落水工伤，海浪马上送你回来', 'bad');
+        this.remember(actor, '落水过一次');
+        this.requestBoss('death', actor, `${actor.name}落水倒下，等待回岸`);
       }
     }
   }
@@ -1051,10 +1264,11 @@ class IslandSimulation {
     actor.recoverTick = 0;
     actor.nextTripAt = this.time + 0.9;
     actor.body.setEnabled(true);
-    actor.body.setTranslation(onLand(torso, 0.45)
+    actor.body.setTranslation(!actor.swallowed && onLand(torso, 0.45)
       ? { x: torso.x, y: ISLAND.spawn.y, z: torso.z }
       : actor.spawn, true);
     actor.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-    this.announce(actor, '工伤结束，继续打工');
+    this.announce(actor, actor.swallowed ? '被老板吐回来了，继续打工' : '工伤结束，继续打工');
+    actor.swallowed = false;
   }
 }

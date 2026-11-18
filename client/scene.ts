@@ -68,7 +68,8 @@ export function createScene(canvas: HTMLCanvasElement) {
 
   const kit = makeGeometryKit();
   const models = createModels(kit);
-  const animateIsland = makeIsland(world, kit);
+  const island = makeIsland(world, kit);
+  const speechPoint = new T.Vector3();
   const workers = new Map<string, ReturnType<typeof createWorker>>();
   const fish = new Map<string, ReturnType<typeof models.fish> & { state: FishState; carrierId: string | null }>();
   const crates = new Map<string, ReturnType<typeof models.crate>>();
@@ -439,11 +440,15 @@ export function createScene(canvas: HTMLCanvasElement) {
     }
   }
 
-  function render(snapshot: SimSnapshot, elapsed: number) {
+  function projectBossSpeech() {
+    return project(island.bossSpeechAnchor.getWorldPosition(speechPoint));
+  }
+
+  function render(snapshot: SimSnapshot, elapsed: number, bossSpeaking: boolean) {
     const delta = previous < 0 ? 0 : Math.min(0.1, Math.max(0, elapsed - previous));
     previous = elapsed;
     frameCamera(snapshot, delta);
-    animateIsland(elapsed);
+    island.animate(elapsed, snapshot.boss.line?.emotion ?? 'calm', bossSpeaking);
     animateCrew(snapshot, delta, elapsed);
     animateFish(snapshot, elapsed);
     animateCrosshair(snapshot);
@@ -470,5 +475,5 @@ export function createScene(canvas: HTMLCanvasElement) {
     renderer.dispose();
   }
 
-  return { render, aim, project, dispose };
+  return { render, aim, project, projectBossSpeech, dispose };
 }

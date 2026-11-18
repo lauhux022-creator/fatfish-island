@@ -1,3 +1,5 @@
+import type { FishBrainOutput, FishTrigger } from '../fish-brain/types';
+
 export interface Vec3 {
   x: number;
   y: number;
@@ -36,6 +38,7 @@ export interface SimInput {
   interactPressed: boolean;
   jumpPressed: boolean;
   continuePressed?: boolean;
+  chat?: string;
 }
 
 export type RagdollLimb = 'torso' | 'head' | 'leftArm' | 'rightArm' | 'leftLeg' | 'rightLeg';
@@ -68,6 +71,9 @@ export interface PlayerView extends Pose {
   sold: number;
   shiftCash: number;
   shiftSold: number;
+  favor: number;
+  memory: string;
+  giftedBait: boolean;
   metrics: PlayerMetrics;
   optimization: boolean;
   /** ID of the teammate who hooked or launched this worker. */
@@ -140,6 +146,24 @@ export interface ShiftResult {
   ranking: ShiftEntry[];
 }
 
+export interface BossLine extends FishBrainOutput {
+  id: number;
+  trigger: FishTrigger;
+  day: number;
+  effect?: string;
+}
+
+export interface BossView {
+  line: BossLine | null;
+  interview: BossLine | null;
+  pending: boolean;
+  cooldownSeconds: number;
+  calls: number;
+  favor: number;
+  memory: string;
+  priceMultiplier: number;
+}
+
 export interface SimSnapshot {
   tick: number;
   time: number;
@@ -153,6 +177,7 @@ export interface SimSnapshot {
   teamTarget: number;
   metrics: ShiftMetrics;
   result: ShiftResult | null;
+  boss: BossView;
   hook: HookView;
   fish: FishView[];
   crates: CrateView[];

@@ -1,4 +1,5 @@
 import * as T from 'three';
+import type { FishEmotion } from '../../shared/fish-brain/types';
 import { FISHING, ISLAND } from '../../shared/sim/config';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { label, palette as p, seededDecor, type GeometryKit, type Tint } from './geometry';
@@ -327,10 +328,11 @@ export function makeIsland(parent: T.Scene, kit: GeometryKit) {
   });
   mergeStatic(landscape);
 
-  return (seconds: number) => {
+  function animate(seconds: number, emotion: FishEmotion, speaking: boolean) {
     seaTime.value = seconds;
-    boss.position.y = 0.29 + Math.sin(seconds * 1.1) * 0.13;
-    boss.rotation.z = Math.sin(seconds * 0.72) * 0.023;
+    boss.fish.position.y = 0.29 + Math.sin(seconds * 1.1) * 0.13;
+    boss.fish.rotation.z = Math.sin(seconds * 0.72) * 0.023;
+    boss.express(emotion, seconds, speaking);
     for (const [index, bits] of foam.entries()) {
       bits.material.opacity = 0.23 + Math.sin(seconds * 1.20 + index * 0.57) * 0.13 + 0.17;
     }
@@ -343,5 +345,7 @@ export function makeIsland(parent: T.Scene, kit: GeometryKit) {
       spot.ring.scale.y = 0.65 + pulse * 0.40;
       spot.ring.material.opacity = (1 - pulse) * 0.60;
     }
-  };
+  }
+
+  return { animate, bossSpeechAnchor: boss.speechAnchor };
 }

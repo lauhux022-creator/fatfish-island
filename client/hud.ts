@@ -1,3 +1,4 @@
+import { normalizePlayerChat } from '../shared/fish-brain/chat';
 import { ISLAND, PLAY, SHIFT } from '../shared/sim/config';
 import type { FishView, ShiftEntry, SimSnapshot } from '../shared/sim/types';
 import { crewColor } from './crew-colors';
@@ -155,6 +156,9 @@ const markup = `
     </div>
   </header>
   <p class="notice" data-notice role="status" hidden></p>
+  <aside class="boss-bubble" aria-label="大肥鱼" data-boss-bubble role="status" hidden>
+    <span data-boss-say></span>
+  </aside>
   <dialog class="standings" id="standings" aria-labelledby="standings-title" data-standings hidden>
     <div class="standings-head">
       <h2 id="standings-title" data-standings-title></h2>
@@ -171,7 +175,7 @@ const markup = `
         <span class="settlement-status" data-settlement-status></span>
       </div>
       <p class="standings-note" data-standings-note></p>
-      <p class="shift-interview" data-shift-interview hidden></p>
+      <p class="shift-interview" data-shift-interview role="status" hidden><b>大肥鱼</b><span data-shift-interview-say></span><small data-shift-interview-effect hidden></small></p>
       <button type="button" class="shift-continue" data-control="continue">开始下一班 <kbd>Enter</kbd></button>
     </div>
   </dialog>
@@ -184,6 +188,18 @@ const markup = `
       <progress title="当前动作进度" max="1" value="0" hidden></progress>
     </div>
   </aside>
+  <form class="boss-chat" id="boss-chat" data-boss-form hidden>
+    <label for="boss-message">跟大肥鱼说</label>
+    <div class="boss-chat-row">
+      <input id="boss-message" data-boss-input type="text" autocomplete="off" maxlength="120" placeholder="求加价、拍拍马屁，或者告个状">
+      <button type="submit" data-boss-send>递话</button>
+    </div>
+    <div class="boss-chat-info">
+      <span data-boss-favor></span><span data-boss-status aria-live="off"></span>
+    </div>
+    <p class="boss-effect" data-boss-effect hidden></p>
+    <p class="boss-memory" data-boss-memory hidden></p>
+  </form>
   <div class="hud-foot">
     <div class="key-legend" aria-label="快捷键">
       <span><kbd>W A S D</kbd> 移动</span>
@@ -192,6 +208,9 @@ const markup = `
       <span><kbd>E</kbd> 搬／抢／扔</span>
       <span><kbd>空格</kbd> 跳</span>
     </div>
+    <button class="boss-chat-toggle" type="button" aria-controls="boss-chat" aria-expanded="false" data-boss-chat-toggle>
+      <kbd aria-hidden="true">T</kbd> 找老板
+    </button>
     <button class="sound" type="button" data-control="sound" aria-pressed="false" title="静音">静音</button>
     <details class="manual">
       <summary><b aria-hidden="true">?</b> 操作指南</summary>
@@ -245,12 +264,25 @@ function position({ x, y, z }: SimSnapshot['player']['position']) {
   return `${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)}`;
 }
 
-export function createHud(root: HTMLElement, meta: HudMeta) {
+export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: string) => void) {
   root.classList.add('game');
   root.innerHTML = markup;
 
   const ui = <T extends Element>(selector: string): T => root.querySelector<T>(selector)!;
   const canvas = ui<HTMLCanvasElement>('.world');
+  const bossBubble = ui<HTMLElement>('[data-boss-bubble]');
+  const bossSay = ui('[data-boss-say]');
+  const bossToggle = ui<HTMLButtonElement>('[data-boss-chat-toggle]');
+  const bossForm = ui<HTMLFormElement>('[data-boss-form]');
+  const bossInput = ui<HTMLInputElement>('[data-boss-input]');
+  const bossStatus = ui('[data-boss-status]');
+  const bossFavor = ui('[data-boss-favor]');
+  const bossMemory = ui<HTMLElement>('[data-boss-memory]');
+  const bossEffect = ui<HTMLElement>('[data-boss-effect]');
+  const interview = ui<HTMLElement>('[data-shift-interview]');
+  const interviewSay = ui('[data-shift-interview-say]');
+  const interviewEffect = ui<HTMLElement>('[data-shift-interview-effect]');
+  const task = ui<HTMLElement>('.task');
   const day = ui('[data-day]');
   const cash = ui('[data-cash]');
   const sold = ui('[data-sold]');
@@ -280,6 +312,99 @@ export function createHud(root: HTMLElement, meta: HudMeta) {
   let previousBoard = '';
   let boardPinned = false;
   let latest: SimSnapshot | undefined;
+  let lastLineId: number | undefined;
+  let speakUntil = 0;
+  let composing = false;
+
+  function setChatOpen(open: boolean) {
+    bossForm.hidden = !open;
+    bossToggle.setAttribute('aria-expanded', String(open));
+    task.hidden = open;
+  }
+
+  function focusChat() {
+    if (!latest || latest.shiftPaused) return false;
+    setChatOpen(true);
+    bossInput.focus();
+    return true;
+  }
+
+  bossToggle.addEventListener('click', () => {
+    if (bossForm.hidden) focusChat();
+    else setChatOpen(false);
+  });
+  bossInput.addEventListener('compositionstart', () => { composing = true; });
+  bossInput.addEventListener('compositionend', () => { composing = false; });
+  bossForm.addEventListener('keydown', (event) => {
+    if (composing || event.isComposing || event.key !== 'Escape') return;
+    event.preventDefault();
+    setChatOpen(false);
+    bossToggle.focus();
+  });
+  bossForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (composing || !latest || latest.shiftPaused) return;
+    const text = normalizePlayerChat(bossInput.value);
+    if (!text) {
+      bossInput.focus();
+      return;
+    }
+    sendChat(text);
+    bossInput.value = '';
+    bossInput.blur();
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && bossForm.contains(focused)) focused.blur();
+    writeText(bossStatus, '已递话');
+  });
+
+  function updateBoss(snapshot: SimSnapshot) {
+    const { boss, shiftPaused } = snapshot;
+    const line = boss.line;
+    if (line && line.id !== lastLineId) {
+      lastLineId = line.id;
+      speakUntil = performance.now() + 7600;
+      Object.assign(bossBubble.dataset, {
+        lineId: String(line.id),
+        emotion: line.emotion,
+        trigger: line.trigger,
+        action: line.action,
+      });
+      writeText(bossSay, line.say);
+    }
+    bossBubble.hidden = !line || shiftPaused || performance.now() >= speakUntil;
+    if (shiftPaused && !bossForm.hidden) setChatOpen(false);
+    const meeting = shiftPaused && boss.interview?.day === snapshot.day ? boss.interview : null;
+    const meetingPending = shiftPaused && boss.pending;
+    interview.hidden = !meeting && !meetingPending;
+    if (!interview.hidden) {
+      interview.dataset.emotion = meeting?.emotion ?? 'calm';
+      writeText(interviewSay, meeting?.say ?? '正在对账…');
+      interviewEffect.hidden = !meeting?.effect;
+      if (meeting?.effect) writeText(interviewEffect, meeting.effect);
+    }
+    if (bossForm.hidden) return;
+    const effect = line?.trigger === 'chat' ? line.effect : '';
+    bossEffect.hidden = !effect;
+    if (effect) writeText(bossEffect, effect);
+    const bait = snapshot.player.giftedBait ? ' · 已备加急饵' : '';
+    writeText(bossFavor, `好感 ${boss.favor > 0 ? '+' : ''}${boss.favor}${bait}`);
+    const cooldown = Math.max(0, Math.ceil(boss.cooldownSeconds));
+    const wait = cooldown ? `${cooldown} 秒后可回话` : '';
+    writeText(bossStatus, boss.pending ? (cooldown ? `等老板 · ${cooldown} 秒` : '等老板回话…') : wait);
+    bossMemory.hidden = !boss.memory;
+    if (boss.memory) writeText(bossMemory, boss.memory);
+  }
+
+  function setBossAnchor(point: { x: number; y: number }) {
+    const width = bossBubble.offsetWidth;
+    const gutter = width / 2 + 8;
+    const x = Math.max(gutter, Math.min(root.clientWidth - gutter, point.x));
+    const y = Math.max(bossBubble.offsetHeight + 12, point.y);
+    const tail = Math.max(14, Math.min(width - 14, point.x - x + width / 2));
+    bossBubble.style.setProperty('--boss-x', `${Math.round(x)}px`);
+    bossBubble.style.setProperty('--boss-y', `${Math.round(y)}px`);
+    bossBubble.style.setProperty('--boss-tail', `${Math.round(tail)}px`);
+  }
 
   const speedPenalty = Math.round((1 - SHIFT.optimizationSpeed) * 100);
   writeText(ui('[data-standings-note]'), `待优化次日移速 −${speedPenalty}%`);
@@ -383,6 +508,7 @@ export function createHud(root: HTMLElement, meta: HudMeta) {
     writeText(day, `第 ${snapshot.day} 天`);
     writeText(clock, `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`);
     updateKpi(snapshot);
+    updateBoss(snapshot);
     updateStandings(snapshot);
     writeText(cash, `¥${snapshot.cash}`);
     const soldCount = `${snapshot.sold} `;
@@ -434,6 +560,9 @@ export function createHud(root: HTMLElement, meta: HudMeta) {
       fishEscaped: String(snapshot.metrics.fishEscaped),
       fishTransferred: String(snapshot.metrics.fishTransferred),
       fishIncidents: String(snapshot.metrics.fishIncidents),
+      bossFavor: String(snapshot.boss.favor),
+      bossAction: snapshot.boss.line?.action ?? '',
+      bossCooldown: snapshot.boss.cooldownSeconds.toFixed(2),
       players: snapshot.players.map(({ id, shiftCash, shiftSold }) => `${id}:${shiftCash}/${shiftSold}`).join(','),
     });
     const entities = [...fish.filter((item) => item.state !== 'swimming'), ...crates];
@@ -444,6 +573,7 @@ export function createHud(root: HTMLElement, meta: HudMeta) {
       `个人 干扰 ${player.metrics.interference} · 被抢 ${player.metrics.fishStolen} · 挨桨 ${player.metrics.paddleHits} · 倒地 ${player.metrics.knockdowns}`,
       `个人渔获 逃跑 ${player.metrics.fishEscaped} · 涉鱼 ${player.metrics.fishIncidents}`,
       `全队 逃跑 ${snapshot.metrics.fishEscaped} · 易手 ${snapshot.metrics.fishTransferred} · 涉鱼 ${snapshot.metrics.fishIncidents}`,
+      `老板 好感 ${snapshot.boss.favor} · 鱼价 ×${snapshot.boss.priceMultiplier.toFixed(2)}${player.giftedBait ? ' · 加急饵' : ''}`,
       ...snapshot.players.filter((member) => member.bot).map((member) =>
         `${member.name} ${position(member.position)} ¥${member.shiftCash} ${member.hook.phase} 干扰 ${member.metrics.interference}`),
       ...entities.map((item) => `${item.id} ${item.state} ${position(item.position)}`),
@@ -455,5 +585,5 @@ export function createHud(root: HTMLElement, meta: HudMeta) {
     writeText(error, message);
   }
 
-  return { canvas, update, setError };
+  return { canvas, update, setError, focusChat, setBossAnchor, isBossSpeaking: () => !bossBubble.hidden };
 }

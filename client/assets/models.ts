@@ -1,4 +1,5 @@
 import * as T from 'three';
+import type { FishEmotion } from '../../shared/fish-brain/types';
 import { FISH } from '../../shared/sim/config';
 import type { FishKind, RagdollLimb } from '../../shared/sim/types';
 import { crewColor } from '../crew-colors';
@@ -195,18 +196,22 @@ export function makeBoss(parent: T.Object3D, kit: GeometryKit) {
   const pink = 0xca7559;
   kit.rock(fish, green, 0, 0, 0, 2.48, 1.45, 1.19);
   kit.orb(fish, 0x93af78, 0.12, -0.31, 0.5, 1.99, 0.90, 0.83);
-  kit.orb(fish, pink, 0.09, 0.04, 1.14, 0.78, 0.30, 0.29);
-  kit.orb(fish, 0x4e4741, 0.09, 0.028, 1.374, 0.60, 0.16, 0.088);
-  kit.box(fish, 0xffedbd, 0.18, 0.122, 1.446, 0.13, 0.112, 0.070).rotation.z = 0.05;
-  for (const side of [-1, 1]) {
+  const mouth = kit.group(fish, 0.09, 0.04, 1.14);
+  kit.orb(mouth, pink, 0, 0, 0, 0.78, 0.30, 0.29);
+  kit.orb(mouth, 0x4e4741, 0, -0.012, 0.234, 0.60, 0.16, 0.088);
+  kit.box(mouth, 0xffedbd, 0.09, 0.082, 0.306, 0.13, 0.112, 0.070).rotation.z = 0.05;
+  const face = [-1, 1].map(side => {
     const lens = side * 0.54 + 0.04;
-    kit.orb(fish, 0xffecae, lens, 0.56, 1.11, 0.29, 0.31, 0.237);
-    kit.orb(fish, p.ink, lens + 0.048, 0.56, 1.31, 0.122, 0.16, 0.090);
-    kit.orb(fish, 0xffffd1, lens + 0.082, 0.628, 1.37, 0.045, 0.047, 0.046);
-    kit.box(fish, 0x497664, lens - 0.044, 0.87, 1.19, 0.49, 0.115, 0.129).rotation.z = side * -0.17;
+    const eye = kit.group(fish, lens, 0.56, 0);
+    kit.orb(eye, 0xffecae, 0, 0, 1.11, 0.29, 0.31, 0.237);
+    kit.orb(eye, p.ink, 0.048, 0, 1.31, 0.122, 0.16, 0.090);
+    kit.orb(eye, 0xffffd1, 0.082, 0.068, 1.37, 0.045, 0.047, 0.046);
+    const brow = kit.box(fish, 0x497664, lens - 0.044, 0.87, 1.19, 0.49, 0.115, 0.129);
+    brow.rotation.z = side * -0.17;
     kit.orb(fish, 0xa9b581, side * 0.96 + 0.08, 0.06, 1.06, 0.27, 0.17, 0.23);
     kit.orb(fish, 0x437c71, side * 1.94, -0.34, 0.83, 0.84, 0.29, 0.44, true).rotation.y = side * -0.24;
-  }
+    return { eye, brow, side };
+  });
   kit.orb(fish, 0x467e71, -2.28, 0.03, -0.26, 0.63, 0.96, 0.25, true).rotation.z = 0.38;
   kit.orb(fish, 0x467e71, -2.36, -0.24, -0.31, 0.60, 0.51, 0.24, true).rotation.z = 0.37;
   const cap = kit.group(fish, -0.38, 1.22, 0.07);
@@ -215,5 +220,34 @@ export function makeBoss(parent: T.Object3D, kit: GeometryKit) {
   kit.tube(cap, 0xe7cf90, 0, 0.17, -0.034, 0.54, 0.32, 0.52);
   kit.tube(cap, 0xffe4a1, 0, 0.33, -0.034, 0.65, 0.099, 0.58);
   kit.box(cap, 0xf39836, 0, 0.172, 0.50, 0.15, 0.14, 0.057);
-  return fish;
+
+  const speechAnchor = kit.group(fish, -0.26, 1.63, 0.35);
+  const expressions = {
+    calm:      { eyes: [1, 1], brows: [0, 0], browTilt: -0.17, mouth: [1, 1, 0] },
+    happy:     { eyes: [0.58, 0.58], brows: [0.09, 0.09], browTilt: -0.32, mouth: [1.15, 1.12, 0.04] },
+    annoyed:   { eyes: [0.71, 0.71], brows: [-0.13, -0.13], browTilt: 0.58, mouth: [0.91, 0.68, -0.07] },
+    smug:      { eyes: [0.46, 0.91], brows: [0.04, 0.15], browTilt: -0.27, mouth: [1.04, 0.76, -0.17] },
+    surprised: { eyes: [1.26, 1.26], brows: [0.24, 0.24], browTilt: -0.07, mouth: [0.68, 1.48, 0] },
+  } as const satisfies Record<FishEmotion, {
+    eyes: readonly [number, number];
+    brows: readonly [number, number];
+    browTilt: number;
+    mouth: readonly [number, number, number];
+  }>;
+
+  function express(emotion: FishEmotion, seconds: number, speaking: boolean) {
+    const expression = expressions[emotion];
+    const blink = Math.max(0, 1 - Math.abs((seconds % 5.6) - 5.42) * 17);
+    for (const [index, { eye, brow, side }] of face.entries()) {
+      eye.scale.y = expression.eyes[index] * (1 - blink * 0.86);
+      brow.position.y = 0.87 + expression.brows[index];
+      brow.rotation.z = side * expression.browTilt;
+    }
+    const [width, height, tilt] = expression.mouth;
+    mouth.scale.x = width;
+    mouth.scale.y = height + (speaking ? Math.sin(seconds * 11) * 0.12 : 0);
+    mouth.rotation.z = tilt;
+  }
+
+  return { fish, speechAnchor, express };
 }

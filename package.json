@@ -1,6 +1,6 @@
 {
   "name": "fatfish-island",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -14,7 +14,9 @@
     "build": "npm run typecheck && vite build",
     "preview": "vite preview --host 127.0.0.1 --strictPort",
     "test:smoke": "node scripts/smoke.mjs",
-    "test:review": "node scripts/review-shift.mjs"
+    "test:review": "node scripts/review-shift.mjs",
+    "test:brain": "node --import tsx --test scripts/fish-brain.test.ts",
+    "test:m3": "node scripts/smoke-m3.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.21.0",

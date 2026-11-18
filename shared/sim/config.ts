@@ -81,6 +81,29 @@ export const SHIFT = {
   optimizationSpeed: 0.9,
 } as const;
 
+export const BOSS = {
+  cooldownSeconds: 8,
+  maxPending: 6,
+  maxRecentEvents: 14,
+  maxMemoryEntries: 3,
+  minFavor: -100,
+  maxFavor: 100,
+  praiseFavor: 7,
+  bribeFavor: 16,
+  complaintFavor: 4,
+  backfireFavor: -8,
+  blamedFavor: -7,
+  maxBonusRate: 0.25,
+  maxFineRate: 0.2,
+  kpiRange: [0.9, 1.1],
+  priceStep: [-6, 8],
+  priceRange: [85, 115],
+  giftBiteReduction: 2.8,
+  rewardCrates: [{ x: -5.9, y: 0.45, z: 4.4 }, { x: -4.8, y: 0.45, z: 5.3 }],
+  swallowLanding: { x: 0.3, y: -0.65, z: -8.4 },
+  swallowFlightSeconds: 0.95,
+} as const;
+
 export const TEAM_DAILY_KPI = [1350, 1425, 1500, 1575] as const;
 
 // Three-day settlement arrives in M5. Each cycle sums its three daily targets.
