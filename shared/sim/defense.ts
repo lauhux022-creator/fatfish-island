@@ -95,14 +95,14 @@ export class Defense {
     };
   }
 
-  startNight(day: number, time: number) {
+  startNight(day: number, time: number, orderWood = 0) {
     this.mode = 'night';
     this.time = time;
     this.enemies.clear();
     this.waveAt = time + CAMPAIGN.raid.firstWaveSeconds;
     this.wave = 0;
     this.raidSize = Math.min(3, 2 + Math.floor((day - 1) / CAMPAIGN.cycleDays));
-    this.wood = Math.min(CAMPAIGN.maxWood, this.wood + CAMPAIGN.tideWood);
+    this.wood = Math.min(CAMPAIGN.maxWood, this.wood + CAMPAIGN.tideWood) + orderWood;
   }
 
   endNight() {

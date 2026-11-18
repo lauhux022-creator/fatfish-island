@@ -105,9 +105,7 @@ async function aim({ page }, at) {
   await page.mouse.move(point.x, point.y);
 }
 
-async function buy(client, capture = false) {
-  const { page, virtual } = client;
-  const funded = await drive(client, (s) => s.cash >= 40 && s.sold > 0, createReviewPolicy(), 215);
+async function reachShop(client) {
   const shop = { x: -7.3, z: 1.2 };
   await drive(client, ({ player }) => player.shopOpen, ({ player }) => {
     const { x, z } = player.position;
@@ -116,6 +114,12 @@ async function buy(client, capture = false) {
     if (x > -5.2) return { moveX: -1 };
     return walk(player.position, shop);
   }, 15);
+}
+
+async function buy(client, capture = false) {
+  const { page, virtual } = client;
+  const funded = await drive(client, (s) => s.cash >= 40 && s.sold > 0, createReviewPolicy(), 215);
+  await reachShop(client);
   await page.keyboard.press('KeyQ');
   const item = page.locator('[data-shop-buy="popper"]');
   assert(await item.isVisible());
@@ -233,13 +237,8 @@ async function room() {
 
 try {
   if (pagesOnly) {
-    const client = await boot(false);
-    await client.page.keyboard.down('KeyA');
-    try {
-      await wait(client.page, () => window.fatfishDebug.snapshot().player.shopOpen, null, 8000);
-    } finally {
-      await client.page.keyboard.up('KeyA');
-    }
+    const client = await boot(true);
+    await reachShop(client);
     await client.page.keyboard.press('KeyQ');
     assert(await client.page.locator('[data-shop-buy="popper"]').isVisible());
     console.log('Pages 走到摊位打开弹鱼桶目录，和三名机器人本地开班。');

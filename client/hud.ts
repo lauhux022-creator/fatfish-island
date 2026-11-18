@@ -3,6 +3,7 @@ import { crewReaction } from '../shared/fish-brain/reactions';
 import { bossBust, crewBust, updatePortrait } from './assets/portraits';
 import { BUILD_KINDS, type CampaignCycleResult, type WarehouseView } from '../shared/sim/campaign-types';
 import { CAMPAIGN, ISLAND, PLAY, SHIFT } from '../shared/sim/config';
+import { DAILY_ORDERS } from '../shared/sim/orders';
 import { POPPER } from '../shared/sim/popper';
 import { SHOP, SHOP_ITEM_IDS } from '../shared/sim/shop';
 import type { FishView, ShiftEntry, SimSnapshot } from '../shared/sim/types';
@@ -256,6 +257,14 @@ const markup = `
       <div class="campaign-ledger" data-campaign-ledger>
         <p><span data-cycle-label>三天指标</span><strong data-cycle-total></strong></p>
         <p><span>仓库</span><strong data-warehouse></strong></p>
+        <div class="daily-order" data-daily-order aria-label="今日订单按玩家交货累计" hidden>
+          <p class="daily-order-row">
+            <span data-daily-order-status></span>
+            <span data-daily-order-label></span>
+            <strong data-daily-order-progress></strong>
+            <span data-daily-order-reward></span>
+          </p>
+        </div>
       </div>
     </div>
     <div class="account">
@@ -286,6 +295,10 @@ const markup = `
         <strong data-settlement-kpi></strong>
         <span class="settlement-status" data-settlement-status></span>
       </div>
+      <p class="settlement-order" data-settlement-order hidden>
+        <span data-settlement-order-title></span>
+        <strong data-settlement-order-result></strong>
+      </p>
       <section class="cycle-result" data-cycle-result aria-label="三天结算" hidden>
         <p data-cycle-verdict></p>
         ${recapMarkup('cycle')}
@@ -518,6 +531,14 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   const cycleLabel = ui('[data-cycle-label]');
   const cycleTotal = ui('[data-cycle-total]');
   const warehouse = ui('[data-warehouse]');
+  const dailyOrder = ui<HTMLElement>('[data-daily-order]');
+  const orderLabel = ui('[data-daily-order-label]');
+  const orderStatus = ui('[data-daily-order-status]');
+  const orderProgress = ui('[data-daily-order-progress]');
+  const orderReward = ui<HTMLElement>('[data-daily-order-reward]');
+  const settlementOrder = ui<HTMLElement>('[data-settlement-order]');
+  const settlementOrderTitle = ui('[data-settlement-order-title]');
+  const settlementOrderResult = ui('[data-settlement-order-result]');
   const campaignControls = ui<HTMLElement>('[data-campaign-controls]');
   const buildPanel = ui<HTMLElement>('[data-build-panel]');
   const wood = ui('[data-wood]');
@@ -788,9 +809,10 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
       }));
     const displayDay = settled?.day ?? snapshot.day;
     const cycle = settled && snapshot.campaign.lastCycle?.day === displayDay ? snapshot.campaign.lastCycle : null;
-    const { warehouse } = snapshot.campaign;
+    const { warehouse, order } = snapshot.campaign;
+    const finishedOrder = settled && order?.day === displayDay && order.status !== 'open' ? order : null;
     const totals = cycle ? [warehouse.stock, warehouse.lostFish, warehouse.lostValue] : null;
-    const key = JSON.stringify([displayDay, Boolean(settled), teamRevenue, teamTarget, ranking, cycle, totals]);
+    const key = JSON.stringify([displayDay, Boolean(settled), teamRevenue, teamTarget, ranking, cycle, totals, finishedOrder]);
     if (key !== previousBoard) {
       previousBoard = key;
       standings.dataset.day = String(displayDay);
@@ -799,6 +821,13 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
       stamp.hidden = !settled;
       settlement.hidden = !settled;
       cycleResult.hidden = !cycle;
+      settlementOrder.hidden = !finishedOrder;
+      if (finishedOrder) {
+        settlementOrder.dataset.status = finishedOrder.status;
+        writeText(settlementOrderTitle, `玩家订单 · ${DAILY_ORDERS[finishedOrder.id].title}`);
+        writeText(settlementOrderResult, finishedOrder.status === 'complete'
+          ? `已完成 · +${finishedOrder.woodReward} 木` : `已过期 · ${finishedOrder.progress}/${finishedOrder.target}`);
+      }
       if (cycle) {
         cycleResult.dataset.passed = String(cycle.passed);
         const verdict = cycle.passed ? '三天达标，螃蟹上岸了'
@@ -871,6 +900,22 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
     writeText(cycleLabel, `三天指标 · 第 ${cycle.lastDay} 天结算`);
     writeText(cycleTotal, `¥${cycle.secured} / ¥${cycle.target}`);
     writeText(warehouse, `${stock} 尾${lostFish ? ` · 被抢 ${lostFish} 尾（¥${lostValue}）` : ''}`);
+    const { order } = campaign;
+    dailyOrder.hidden = !order || order.day !== snapshot.day || (phase !== 'day' && phase !== 'night');
+    if (order && !dailyOrder.hidden) {
+      dailyOrder.dataset.orderId = order.id;
+      dailyOrder.dataset.status = order.status;
+      const spec = DAILY_ORDERS[order.id];
+      const status = { open: '玩家订单', complete: '已完成', expired: '已过期' }[order.status];
+      const rewarded = phase === 'night' && order.status === 'complete';
+      const reward = `+${order.woodReward} 木`;
+      dailyOrder.title = `${spec.title} · ${order.status === 'expired' ? '订单已过期' : rewarded ? `已发放 ${reward}` : `完成后入夜 ${reward}`}`;
+      writeText(orderStatus, status);
+      writeText(orderLabel, spec.requirement);
+      writeText(orderProgress, `${order.progress}/${order.target}`);
+      orderReward.hidden = order.status === 'expired';
+      if (!orderReward.hidden) writeText(orderReward, reward);
+    }
     const observing = root.dataset.roomMode === 'spectating' || root.dataset.roomMode === 'reconnecting';
     const hasPopper = !observing && showPopper(snapshot);
     const nextPopper = Math.ceil(player.popperCooldown || 0);

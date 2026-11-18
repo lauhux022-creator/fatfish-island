@@ -10,6 +10,7 @@ import { assignWorkerRoles, DEFAULT_WORKER_ROLE, WORKER_ROLES, type WorkerAnimat
 import { BOSS, CAMPAIGN, CREW, FISH, FISHING, ISLAND, PLAY, SHIFT, STEP_SECONDS, TEAM_DAILY_KPI, TICKS_PER_SECOND, WORKER_MOTION } from './config';
 import { buildAhead } from './construction';
 import { Defense } from './defense';
+import { DailyOrder } from './orders';
 import { CAMPAIGN_PACES, isCampaignPace, type CampaignPace } from './pace';
 import { POPPER, popperTarget, type PopperView } from './popper';
 import { resolveMovement, yawRotation } from './prediction';
@@ -221,6 +222,7 @@ class IslandSimulation {
   private readonly defense: Defense;
   private readonly boss: FishBrainRuntime;
   private day: number;
+  private dailyOrder: DailyOrder;
   private shiftEnd: number;
   private shiftPaused = false;
   private phase: CampaignPhase = 'day';
@@ -249,6 +251,7 @@ class IslandSimulation {
     this.seed = seed;
     this.pace = isCampaignPace(pace) ? pace : 'classic';
     this.day = Number.isFinite(day) ? Math.max(1, Math.trunc(day)) : 1;
+    this.dailyOrder = new DailyOrder(this.day);
     this.cycleFirstDay = this.day;
     this.random = seededRandom(`${seed}:world`);
     this.bots = createBotController(seed);
@@ -349,11 +352,12 @@ class IslandSimulation {
     this.updateFloppingFish();
     this.world.step();
     for (const actor of this.actors) this.updateFlyingHook(actor);
-    this.updateOutcomes();
+    const completedOrder = this.updateOutcomes();
     if (this.phase === 'night' || this.phase === 'boss') this.updateDefense();
     if (this.phase === 'day' && this.tick >= this.shiftEnd) this.startNight();
     else if (this.phase === 'night' && this.tick >= this.shiftEnd) this.settleShift();
     else if (this.phase === 'boss' && this.defense.bossDefeated) this.phase = 'cleared';
+    if (completedOrder) this.announce(completedOrder.worker, completedOrder.notice, 'good');
   }
 
   snapshot(): SimSnapshot {
@@ -448,6 +452,7 @@ class IslandSimulation {
         target: this.cycleTarget + (this.shiftPaused || this.phase === 'boss' || this.phase === 'cleared' ? 0 : this.teamTarget),
       },
       lastCycle: this.lastCycle && { ...this.lastCycle, eaten: this.lastCycle.eaten && { ...this.lastCycle.eaten } },
+      order: this.dailyOrder.snapshot(),
       reviveCost: CAMPAIGN.reviveCost,
     };
   }
@@ -802,7 +807,7 @@ class IslandSimulation {
   private startNight() {
     this.phase = 'night';
     this.shiftEnd = this.tick + this.nightLength;
-    this.defense.startNight(this.day, this.time);
+    this.defense.startNight(this.day, this.time, this.dailyOrder.closeAtDusk());
     for (const actor of this.actors) {
       if (actor.hook.phase !== 'idle') this.clearHook(actor);
       this.announce(actor, '天黑了！海怪盯上了仓库', 'bad');
@@ -897,6 +902,7 @@ class IslandSimulation {
     this.affectedFish.clear();
     this.notices.clear();
     this.day += 1;
+    this.dailyOrder = new DailyOrder(this.day);
     this.phase = 'day';
     this.shiftEnd = this.tick + this.shiftLength;
     this.shiftPaused = false;
@@ -1739,6 +1745,7 @@ class IslandSimulation {
   }
 
   private updateOutcomes() {
+    let completedOrder: { worker: Actor; notice: string } | null = null;
     for (const fish of [...this.fish]) {
       const point = fish.body.translation();
       if (fish.state === 'flopping' && !onLand(point)) {
@@ -1764,7 +1771,11 @@ class IslandSimulation {
           }
           const bait = fish.baitPlayerId ? ` · 活饵 ×${baitMultiplier}` : '';
           const trick = fish.airCaught ? ` · 空接 ×${airCatchMultiplier}` : '';
-          this.announce(worker, `入账 ¥${amount} · ${FISH[fish.kind].name} ×${fish.multiplier.toFixed(2)}${bait}${trick}`, 'good');
+          const orderWood = this.phase === 'day' && !worker.bot
+            ? this.dailyOrder.recordSale(fish.kind, Boolean(fish.baitPlayerId || fish.airCaught)) : 0;
+          const sale = `入账 ¥${amount} · ${FISH[fish.kind].name} ×${fish.multiplier.toFixed(2)}${bait}${trick}`;
+          if (orderWood) completedOrder = { worker, notice: `${sale} · 订单完成！今晚加发 ${orderWood} 漂流木` };
+          else this.announce(worker, sale, 'good');
           this.requestBoss('sale', worker, `${worker.name}卖出${FISH[fish.kind].name}`, amount);
         }
         this.removeFish(fish);
@@ -1797,6 +1808,7 @@ class IslandSimulation {
         this.requestBoss('death', actor, `${actor.name}落水倒下，等待回岸`);
       }
     }
+    return completedOrder;
   }
 
   private updateCrate(crate: Crate) {

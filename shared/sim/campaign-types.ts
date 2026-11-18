@@ -1,3 +1,4 @@
+import type { DailyOrderView } from './orders';
 import type { CampaignPace } from './pace';
 import type { Vec3 } from './types';
 
@@ -58,5 +59,6 @@ export interface CampaignView {
   warehouse: WarehouseView;
   cycle: CampaignCycle;
   lastCycle: CampaignCycleResult | null;
+  order: DailyOrderView;
   reviveCost: number;
 }

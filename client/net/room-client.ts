@@ -5,6 +5,7 @@ import {
 import { BUILD_KINDS } from '../../shared/sim/campaign-types';
 import { isWorkerAnimation, isWorkerRoleId, type WorkerRoleId } from '../../shared/sim/cast';
 import { STEP_SECONDS } from '../../shared/sim/config';
+import { DAILY_ORDER_IDS } from '../../shared/sim/orders';
 import { isCampaignPace, type CampaignPace } from '../../shared/sim/pace';
 import { predictPlayerMovement } from '../../shared/sim/prediction';
 import { emptyInput, type PlayerView, type SimInput, type SimSnapshot } from '../../shared/sim/types';
@@ -127,9 +128,20 @@ function defenseEntity(value: unknown): value is Record<string, unknown> {
   return record(value) && typeof value.id === 'string' && vector(value.position) && numbers(value, ['yaw', 'hp', 'maxHp']);
 }
 
+function dailyOrderShape(value: unknown) {
+  if (!record(value) || !DAILY_ORDER_IDS.some((id) => id === value.id)
+    || (value.status !== 'open' && value.status !== 'complete' && value.status !== 'expired')) return false;
+  const { day, progress, target, woodReward } = value;
+  return typeof day === 'number' && Number.isSafeInteger(day) && day > 0
+    && typeof target === 'number' && Number.isSafeInteger(target) && target > 0
+    && typeof progress === 'number' && Number.isSafeInteger(progress) && progress >= 0 && progress <= target
+    && typeof woodReward === 'number' && Number.isSafeInteger(woodReward) && woodReward > 0;
+}
+
 function campaignShape(value: unknown) {
   if (!record(value) || !['day', 'night', 'boss', 'cleared'].some((phase) => phase === value.phase)
     || !isCampaignPace(value.pace)
+    || !dailyOrderShape(value.order)
     || !numbers(value, ['remaining', 'reviveCost', 'wood'])
     || !record(value.warehouse) || !vector(value.warehouse.position)
     || !numbers(value.warehouse, ['stock', 'value', 'lostFish', 'lostValue'])
