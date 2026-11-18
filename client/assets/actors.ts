@@ -146,14 +146,14 @@ export function makeActor(parent: T.Object3D, assets: ActorAssets, height: numbe
     });
   }
 
-  function play(name: string, delta: number) {
+  function play(name: string, delta: number, swingSeconds: number = PLAY.swingSeconds) {
     if (!mixer || !look) return;
     const clip = look.clips.get(name) ?? look.clips.get('idle');
     if (clip && activeName !== clip.name) {
       const next = mixer.clipAction(clip);
       const loop = looping.has(clip.name);
       next.reset().setEffectiveWeight(1).setEffectiveTimeScale(1).setLoop(loop ? T.LoopRepeat : T.LoopOnce, loop ? Infinity : 1);
-      if (name === 'chop') next.setDuration(PLAY.swingSeconds);
+      if (name === 'chop') next.setDuration(swingSeconds);
       next.clampWhenFinished = !loop;
       next.play();
       if (active) next.crossFadeFrom(active, name === 'chop' ? 0.04 : 0.13, false);

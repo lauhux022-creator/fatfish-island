@@ -3,6 +3,7 @@ import { ROOM_CODE_PATTERN, ROOM_MAX_NAME, type RoomClientMessage } from '../sha
 import { BUILD_KINDS, type BuildKind } from '../shared/sim/campaign-types';
 import { isWorkerRoleId } from '../shared/sim/cast';
 import { CAMPAIGN, PLAY, SHIFT } from '../shared/sim/config';
+import { isShopItemId } from '../shared/sim/shop';
 import type { SimInput } from '../shared/sim/types';
 
 const TOKEN_PATTERN = /^[\w-]{24}$/;
@@ -33,6 +34,8 @@ function parseInput(value: unknown): SimInput | null {
   if (aim !== null && (!record(aim) || !finite(aim.x) || !finite(aim.z))) return null;
   if (INPUT_FLAGS.some((flag) => value[flag] !== undefined && typeof value[flag] !== 'boolean')) return null;
   if (value.build !== undefined && !BUILD_KINDS.includes(value.build as BuildKind)) return null;
+  const buy = value.buy;
+  if (buy !== undefined && !isShopItemId(buy)) return null;
   if (value.chat !== undefined && typeof value.chat !== 'string') return null;
   const input: SimInput = {
     moveX: clamp(value.moveX, 1),
@@ -47,6 +50,7 @@ function parseInput(value: unknown): SimInput | null {
     continuePressed: value.continuePressed === true,
     revivePressed: value.revivePressed === true,
     build: value.build as BuildKind | undefined,
+    buy,
   };
   if (typeof value.chat === 'string') input.chat = normalize(value.chat, 120);
   return input;

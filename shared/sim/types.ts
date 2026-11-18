@@ -1,6 +1,7 @@
 import type { FishBrainOutput, FishTrigger } from '../fish-brain/types';
 import type { BuildKind, CampaignView } from './campaign-types';
 import type { WorkerAnimation, WorkerRoleId } from './cast';
+import type { ShopEquipment, ShopItemId } from './shop';
 
 export interface Vec3 {
   x: number;
@@ -40,6 +41,7 @@ export interface SimInput {
   interactPressed: boolean;
   jumpPressed: boolean;
   build?: BuildKind;
+  buy?: ShopItemId;
   revivePressed?: boolean;
   continuePressed?: boolean;
   chat?: string;
@@ -75,6 +77,8 @@ export interface PlayerView extends Pose {
   name: string;
   bot: boolean;
   cash: number;
+  equipment: ShopEquipment;
+  shopOpen: boolean;
   sold: number;
   shiftCash: number;
   shiftSold: number;

@@ -1,6 +1,6 @@
 {
   "name": "fatfish-island",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -22,7 +22,9 @@
     "test:rooms": "node --import tsx --test scripts/room-*.test.ts",
     "test:m45": "node scripts/smoke-m45.mjs",
     "test:campaign": "node --import tsx --test scripts/campaign.test.ts",
-    "test:m5": "node scripts/smoke-m5.mjs"
+    "test:m5": "node scripts/smoke-m5.mjs",
+    "test:m6": "node scripts/smoke-m6.mjs",
+    "test:shop": "node --import tsx --test scripts/shop.test.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.21.0",

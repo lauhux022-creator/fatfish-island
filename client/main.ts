@@ -1,6 +1,7 @@
 import { BUILD_KINDS, type BuildKind } from '../shared/sim/campaign-types';
 import { DEFAULT_WORKER_ROLE, isWorkerRoleId } from '../shared/sim/cast';
 import { STEP_SECONDS } from '../shared/sim/config';
+import { isShopItemId } from '../shared/sim/shop';
 import { emptyInput, type SimInput, type SimSnapshot, type Vec3 } from '../shared/sim/types';
 import { createHud } from './hud';
 import { createSound } from './sound';
@@ -126,6 +127,7 @@ async function startGame() {
     input.continuePressed = false;
     input.build = undefined;
     input.revivePressed = false;
+    input.buy = undefined;
   }
 
   function toggleMute() {
@@ -151,6 +153,10 @@ async function startGame() {
       return;
     }
     if (!canPlay()) return;
+    if (event.key === 'Escape' && hud.closeShop()) {
+      event.preventDefault();
+      return;
+    }
     if (snapshot.shiftPaused) {
       if (event.code === 'Enter' || event.code === 'NumpadEnter') {
         event.preventDefault();
@@ -159,6 +165,10 @@ async function startGame() {
       return;
     }
     if (event.code === 'KeyT' && !event.repeat && hud.focusChat()) {
+      event.preventDefault();
+      return;
+    }
+    if (event.code === 'KeyQ' && !event.repeat && hud.toggleShop()) {
       event.preventDefault();
       return;
     }
@@ -282,6 +292,11 @@ async function startGame() {
   app.addEventListener('lostpointercapture', releaseTouch, options);
   app.addEventListener('click', (event) => {
     if (!(event.target instanceof Element)) return;
+    const shopItem = event.target.closest<HTMLButtonElement>('[data-shop-buy]')?.dataset.shopBuy;
+    if (isShopItemId(shopItem) && canPlay() && !snapshot.shiftPaused) {
+      input.buy = shopItem;
+      return;
+    }
     const control = event.target.closest<HTMLElement>('[data-control]')?.dataset.control;
     if (control === 'campaign-exit' && snapshot.campaign.phase === 'cleared') {
       if (room.status().mode === 'local') location.reload();
@@ -334,6 +349,7 @@ async function startGame() {
       input.continuePressed = false;
       input.build = undefined;
       input.revivePressed = false;
+      input.buy = undefined;
       accumulated = pauseChanged ? 0 : accumulated - stepMs;
     }
 

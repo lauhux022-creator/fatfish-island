@@ -38,6 +38,7 @@ export function createModels(kit: GeometryKit) {
   const dorsalFin = finGeometry([-0.20, 0.0, -0.19, 0.13, -0.03, 0.21, 0.10, 0.0]);
   const sideFin = finGeometry([0.07, 0.04, -0.19, 0.03, -0.11, -0.11, 0.01, -0.07]);
   const warningCone = new T.ConeGeometry(1, 1, 7);
+  const panRim = new T.TorusGeometry(0.207, 0.025, 5, 20);
   const warningDecal = new T.Group();
   label(warningDecal, '待优化', 0.57, 0.225, 0, 0, 0);
 
@@ -179,13 +180,24 @@ export function createModels(kit: GeometryKit) {
     kit.beam(rod, p.mustard, new T.Vector3(0.12, 0.54, -0.74), new T.Vector3(0.12, 0.58, -0.98), 0.024);
     kit.tube(rod, p.ink, 0.018, -0.108, 0.015, 0.067, 0.05).rotation.z = 1.57;
     const tip = kit.group(rod, 0.12, 0.58, -0.98);
+    const rodUpgrade = kit.group(rod);
+    kit.beam(rodUpgrade, 0x408f8c, new T.Vector3(0.022, 0, 0.035), new T.Vector3(0.088, 0.37, -0.50), 0.062);
+    kit.tube(rodUpgrade, p.mustard, 0.022, -0.108, 0.015, 0.083, 0.055).rotation.z = Math.PI / 2;
+    rodUpgrade.visible = false;
 
     const paddle = kit.group(body, 0.34, -0.075, -0.22);
-    kit.box(paddle, 0x9a5f36, 0, 0.08, 0, 0.073, 0.79, 0.073);
-    kit.orb(paddle, p.mustard, 0, 0.60, 0, 0.162, 0.282, 0.049);
-    kit.box(paddle, p.rust, 0, 0.73, 0, 0.196, 0.062, 0.087);
+    const paddleBlade = kit.group(paddle);
+    kit.box(paddleBlade, 0x9a5f36, 0, 0.08, 0, 0.073, 0.79, 0.073);
+    kit.orb(paddleBlade, p.mustard, 0, 0.60, 0, 0.162, 0.282, 0.049);
+    kit.box(paddleBlade, p.rust, 0, 0.73, 0, 0.196, 0.062, 0.087);
+    const paddlePan = kit.group(paddle);
+    kit.box(paddlePan, 0x80563f, 0, 0.115, 0, 0.1, 0.54, 0.09);
+    kit.tube(paddlePan, 0x303c46, 0, 0.56, 0, 0.221, 0.10).rotateX(Math.PI / 2);
+    kit.tube(paddlePan, 0x515c63, 0, 0.56, 0.057, 0.184, 0.025).rotateX(Math.PI / 2);
+    kit.mesh(paddlePan, panRim, 0x969b8f, 0, 0.56, 0.078);
+    paddlePan.visible = false;
     paddle.visible = false;
-    return { yaw, body, standing, ragdoll, rod, tip, paddle, hats, loadedHat };
+    return { yaw, body, standing, ragdoll, rod, rodUpgrade, tip, paddle, paddleBlade, paddlePan, hats, loadedHat };
   }
 
   return { fish, crate, worker };

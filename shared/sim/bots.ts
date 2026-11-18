@@ -1,5 +1,6 @@
 import { BOTS, CAMPAIGN, FISHING, ISLAND, PLAY } from './config';
 import { seededRandom } from './random';
+import { weaponStats } from './shop';
 import { emptyInput, type PlayerView, type SimInput, type SimSnapshot, type Vec3 } from './types';
 
 type Point = Pick<Vec3, 'x' | 'z'>;
@@ -164,7 +165,7 @@ function mischiefInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, 
 
   const range = distance(origin, rival.position);
   if ((!steal || !rival.carrying || until - time < 0.34) && player.swing <= 0 &&
-      range < PLAY.swingReach - 0.22 && Math.abs(rival.position.y - origin.y) < 1.3) {
+      range < weaponStats(player.equipment).reach - 0.22 && Math.abs(rival.position.y - origin.y) < 1.3) {
     endPursuit(brain, player, claims, time, true);
     return { ...emptyInput, aim: rival.position, swingPressed: true };
   }
@@ -233,7 +234,7 @@ function workInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, prof
     });
     const angle = Math.max(0.5, range);
     const approach = blocking ? { x: aim.x - sight.z / angle * 1.4, z: aim.z + sight.x / angle * 1.4 } : aim;
-    const canHit = !blocking && player.swing <= 0 && range < PLAY.swingReach * 0.89 && Math.abs(aim.y - origin.y) < 1.31;
+    const canHit = !blocking && player.swing <= 0 && range < weaponStats(player.equipment).reach * 0.89 && Math.abs(aim.y - origin.y) < 1.31;
     return {
       ...emptyInput, ...steer(origin, approach, 0.97), aim, swingPressed: canHit,
       jumpPressed: canHit && player.grounded && brain.random() < profile.jumpChance,
@@ -276,7 +277,7 @@ function defenseInput(snapshot: SimSnapshot, player: PlayerView, brain: Brain, p
     return { ...emptyInput, ...steer(origin, safe, 0.1), aim: attacker.position };
   }
 
-  const close = distance(origin, attacker.position) < PLAY.swingReach - 0.1;
+  const close = distance(origin, attacker.position) < weaponStats(player.equipment).reach - 0.1;
   const exposed = boss ? attacker.state === 'recover' : attacker.state !== 'windup';
   const canHit = close && exposed && player.swing <= 0 && snapshot.time >= brain.defenseHitAt;
   if (canHit) brain.defenseHitAt = snapshot.time + (boss ? CAMPAIGN.guard.strikeGap : CAMPAIGN.guard.raidStrikeGap);

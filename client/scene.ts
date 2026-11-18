@@ -1,7 +1,8 @@
 import * as T from 'three';
 import { BUILD_KINDS, type CampaignView } from '../shared/sim/campaign-types';
-import { CAMPAIGN, ISLAND, PLAY } from '../shared/sim/config';
+import { CAMPAIGN, FISHING, ISLAND, PLAY } from '../shared/sim/config';
 import { buildAhead, buildSiteAvailable, snapBuildSite } from '../shared/sim/construction';
+import { weaponStats } from '../shared/sim/shop';
 import type { FishState, PlayerView, Pose, SimSnapshot, Vec3 } from '../shared/sim/types';
 import { createActorAssets, makeActor } from './assets/actors';
 import { makeCampaignArt, makeGhost } from './assets/campaign';
@@ -108,6 +109,19 @@ export function createScene(canvas: HTMLCanvasElement) {
   const crosshair = new T.Mesh(new T.RingGeometry(0.73, 1, 28, 1), new T.MeshBasicMaterial({ color: 0xffedd0, opacity: 0.72, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 }));
   crosshair.rotation.x = -Math.PI / 2;
   world.add(crosshair);
+  const castLanding = new T.Mesh(
+    new T.RingGeometry(0.72, 1, 28),
+    new T.MeshBasicMaterial({ transparent: true, opacity: 0.95, depthWrite: false, toneMapped: false }),
+  );
+  castLanding.rotation.x = -Math.PI / 2;
+  castLanding.scale.setScalar(0.29);
+  world.add(castLanding);
+  const catchMarker = new T.Mesh(
+    new T.RingGeometry(0.82, 1, 32),
+    new T.MeshBasicMaterial({ transparent: true, depthWrite: false, toneMapped: false }),
+  );
+  catchMarker.rotation.x = -Math.PI / 2;
+  world.add(catchMarker);
   const buildMarker = new T.Mesh(
     new T.RingGeometry(0.27, 0.38, 4, 1, Math.PI / 4),
     new T.MeshBasicMaterial({ transparent: true, opacity: 0.86, depthWrite: false, toneMapped: false }),
@@ -310,7 +324,11 @@ export function createScene(canvas: HTMLCanvasElement) {
 
     player.yaw.position.set(view.position.x, view.position.y, view.position.z);
     player.yaw.rotation.y = view.yaw;
-    actor.play(view.animation, delta);
+    const hasPan = Boolean(view.equipment?.pan);
+    actor.play(view.animation, delta, weaponStats({ pan: hasPan }).swingSeconds);
+    player.rodUpgrade.visible = Boolean(view.equipment?.rod);
+    player.paddleBlade.visible = !hasPan;
+    player.paddlePan.visible = hasPan;
     worker.walk += delta * 10.5 * moved;
     const walk = worker.walk;
     const stride = Math.sin(walk);
@@ -460,6 +478,31 @@ export function createScene(canvas: HTMLCanvasElement) {
       crosshair.material.color.setHex(hot ? 0xff8346 : 0xffedd0);
       crosshair.material.opacity = (hot ? 0.68 : 0.53) + charge * 0.3;
     }
+    castLanding.visible = Boolean(aimPoint && phase === 'charging' && !aimingAtCrew);
+    if (castLanding.visible && aimPoint) {
+      const { position, yaw } = snapshot.player;
+      const range = T.MathUtils.lerp(FISHING.minRange, FISHING.maxRange, charge);
+      const distance = Math.hypot(aimPoint.x - position.x, aimPoint.z - position.z);
+      const travel = T.MathUtils.clamp(distance, 0.8, range);
+      const x = position.x - Math.sin(yaw) * travel;
+      const z = position.z - Math.cos(yaw) * travel;
+      const water = isWater(x, z);
+      const y = (water ? ISLAND.seaY : ISLAND.groundY) + 0.10;
+      castLanding.position.set(x, y, z);
+      castLanding.material.color.setHex(water ? 0xffd876 : 0xfd7958);
+    }
+  }
+
+  function animateCatchHelp(snapshot: SimSnapshot, seconds: number, selfId: string | null) {
+    const fish = selfId && !snapshot.sold && snapshot.campaign.phase === 'day'
+      ? snapshot.fish.find(item => item.caughtBy === selfId && (item.state === 'flopping' || item.state === 'stunned'))
+      : undefined;
+    catchMarker.visible = Boolean(fish);
+    if (!fish) return;
+    catchMarker.position.set(fish.position.x, ISLAND.groundY + 0.075, fish.position.z);
+    catchMarker.material.color.setHex(fish.state === 'stunned' ? 0x348675 : 0xd4782e);
+    catchMarker.material.opacity = 0.60 + Math.sin(seconds * 9) * 0.20;
+    catchMarker.scale.setScalar(0.55 + Math.sin(seconds * 9) * 0.06);
   }
 
   function animateBuildMarker(snapshot: SimSnapshot, selfId: string | null) {
@@ -558,6 +601,7 @@ export function createScene(canvas: HTMLCanvasElement) {
     animateCrew(snapshot, animationDelta, elapsed, selfId);
     animateFish(snapshot, elapsed);
     animateCrosshair(snapshot);
+    animateCatchHelp(snapshot, elapsed, selfId);
     animateBuildMarker(snapshot, selfId);
     animateEffects(snapshot, elapsed);
     renderer.render(world, camera);

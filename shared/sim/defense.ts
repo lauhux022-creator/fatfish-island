@@ -1,4 +1,4 @@
-import { CAMPAIGN, ISLAND, PLAY, STEP_SECONDS } from './config';
+import { CAMPAIGN, ISLAND, STEP_SECONDS } from './config';
 import type { BuildKind, EnemyView, StructureView } from './campaign-types';
 import { buildSiteAvailable, snapBuildSite } from './construction';
 import { seededRandom } from './random';
@@ -129,12 +129,12 @@ export class Defense {
     return true;
   }
 
-  hit(origin: Vec3, aim: Point) {
+  hit(origin: Vec3, aim: Point, weaponReach: number) {
     let victim: Enemy | undefined;
     let score = Infinity;
     for (const enemy of this.enemies.values()) {
       const gap = distance(enemy.position, origin);
-      const reach = PLAY.swingReach + (enemy.kind === 'crab' ? CAMPAIGN.crab.sizeReach : 0);
+      const reach = weaponReach + (enemy.kind === 'crab' ? CAMPAIGN.crab.sizeReach : 0);
       const dx = enemy.position.x - origin.x;
       const dz = enemy.position.z - origin.z;
       const facing = (aim.x * dx + aim.z * dz) / Math.max(0.01, gap);

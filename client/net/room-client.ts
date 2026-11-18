@@ -16,6 +16,7 @@ const bufferLimit = 12;
 const inputLimit = 32;
 const gapMs = 300;
 const connectTimeoutMs = 7000;
+const snapshotSilenceMs = 2500;
 const retryWindowMs = 70_000;
 const correctionMs = 105;
 
@@ -152,6 +153,8 @@ function snapshotShape(value: unknown): value is SimSnapshot {
   return value.players.every((player: unknown) =>
     pose(player) && typeof player.id === 'string' && typeof player.name === 'string' && typeof player.bot === 'boolean'
     && isWorkerRoleId(player.roleId) && isWorkerAnimation(player.animation) && typeof player.ghost === 'boolean'
+    && typeof player.shopOpen === 'boolean' && record(player.equipment)
+    && typeof player.equipment.rod === 'boolean' && typeof player.equipment.pan === 'boolean' && typeof player.equipment.bait === 'boolean'
     && numbers(player, ['yaw', 'speed', 'ragdoll', 'cash', 'sold', 'shiftCash', 'shiftSold', 'favor', 'revivePaid'])
     && vector(player.velocity) && record(player.metrics) && Array.isArray(player.parts) && player.parts.every(pose)
     && record(player.hook) && numbers(player.hook, ['charge', 'progress'])
@@ -202,6 +205,8 @@ export function createRoomClient(options: ClientOptions) {
   let session: ResumeSession | null = null;
   let retryTimer = 0;
   let handshakeTimer = 0;
+  let snapshotTimer = 0;
+  let snapshotDeadline = 0;
   let retrySince = 0;
   let retries = 0;
   let lastReceivedAt: number | null = null;
@@ -230,9 +235,38 @@ export function createRoomClient(options: ClientOptions) {
     }
   }
 
+  function clearSnapshotWatchdog() {
+    clearTimeout(snapshotTimer);
+    snapshotTimer = 0;
+  }
+
+  function watchSnapshots(now = performance.now()) {
+    if (document.hidden || (state.mode !== 'playing' && state.mode !== 'spectating')) return;
+    snapshotDeadline = now + snapshotSilenceMs;
+    if (!snapshotTimer) snapshotTimer = window.setTimeout(checkSnapshotSilence, snapshotSilenceMs);
+  }
+
+  function checkSnapshotSilence() {
+    snapshotTimer = 0;
+    if (!socket || document.hidden || (state.mode !== 'playing' && state.mode !== 'spectating')) return;
+    const remaining = snapshotDeadline - performance.now();
+    if (remaining > 0) {
+      snapshotTimer = window.setTimeout(checkSnapshotSilence, remaining);
+      return;
+    }
+    stopSocket(false);
+    resetStream();
+    reconnect();
+  }
+
+  function hasFreshSnapshot(now = performance.now()) {
+    return lastReceivedAt !== null && now - lastReceivedAt <= gapMs;
+  }
+
   function stopSocket(leaveRoom: boolean) {
     clearTimeout(retryTimer);
     clearTimeout(handshakeTimer);
+    clearSnapshotWatchdog();
     const old = socket;
     socket = null;
     if (!old) return;
@@ -305,6 +339,9 @@ export function createRoomClient(options: ClientOptions) {
     buffer.push({ tick: message.serverTick, state: message.state });
     if (buffer.length > bufferLimit) buffer.shift();
     lastReceivedAt = now;
+    watchSnapshots(now);
+    retries = 0;
+    retrySince = 0;
     snapshotCount += 1;
     ack = Math.max(ack, message.ack);
     pendingInputs = pendingInputs.filter((entry) => entry.seq > ack);
@@ -354,20 +391,20 @@ export function createRoomClient(options: ClientOptions) {
       } else if (reply.type === 'welcome' && (state.mode === 'connecting' || state.mode === 'reconnecting')) {
         clearTimeout(handshakeTimer);
         resetStream();
-        retrySince = 0;
-        retries = 0;
         session = { url, code: reply.code, token: reply.token };
         persist(session);
         update({
           mode: reply.role === 'player' ? 'playing' : 'spectating',
           code: reply.code, playerId: reply.playerId, focusId: reply.focusId, brain: reply.brain, error: null,
         });
+        watchSnapshots();
       } else if (reply.type === 'snapshot') onSnapshot(reply);
     });
     current.addEventListener('close', () => {
       if (socket !== current) return;
       socket = null;
       clearTimeout(handshakeTimer);
+      clearSnapshotWatchdog();
       resetStream();
       reconnect();
     });
@@ -406,23 +443,25 @@ export function createRoomClient(options: ClientOptions) {
   }
 
   function step(input: SimInput) {
-    if (state.mode !== 'playing' || !socket || socket.readyState !== WebSocket.OPEN || socket.bufferedAmount > 24_000) return;
+    if (state.mode !== 'playing' || !authority || !socket
+      || socket.readyState !== WebSocket.OPEN || socket.bufferedAmount > 24_000) return;
     const next = { ...input, aim: input.aim && { ...input.aim } };
     seq += 1;
     socket.send(JSON.stringify({ type: 'input', seq, input: next }));
     lastHeld = input.castHeld;
     pendingInputs.push({ seq, input: next });
     if (pendingInputs.length > inputLimit) pendingInputs.shift();
-    if (authority && lastReceivedAt !== null && performance.now() - lastReceivedAt <= gapMs
-      && shouldPredict(authority.player, authority)) {
+    if (hasFreshSnapshot() && shouldPredict(authority.player, authority)) {
       const origin = prediction ?? authority.player;
       prediction = limitPrediction(predictPlayerMovement(origin, next), authority.player);
     }
   }
 
   function visibilityChanged() {
-    if (document.hidden && lastHeld) step({ ...emptyInput, castReleased: true });
-    else if (document.hidden) step(emptyInput);
+    if (document.hidden) {
+      step(lastHeld ? { ...emptyInput, castReleased: true } : emptyInput);
+      clearSnapshotWatchdog();
+    } else watchSnapshots();
     const latest = buffer.at(-1);
     if (latest) {
       buffer.splice(0, buffer.length, latest);
@@ -447,7 +486,7 @@ export function createRoomClient(options: ClientOptions) {
     const before = buffer[Math.max(0, afterIndex - 1)] ?? after;
     const amount = after.tick === before.tick ? 1 : (wanted - before.tick) / (after.tick - before.tick);
     let frame = interpolateRoom(latest.state, before.state, after.state, amount, state.playerId);
-    if (state.mode === 'playing' && prediction && state.playerId) {
+    if (state.mode === 'playing' && prediction && state.playerId && hasFreshSnapshot(now)) {
       const guessed = prediction;
       const remaining = correction ? Math.max(0, 1 - (now - correction.at) / correctionMs) : 0;
       const corrected = correction && remaining > 0 ? {
@@ -473,7 +512,7 @@ export function createRoomClient(options: ClientOptions) {
     debug: (): RoomDebugState => ({
       ...state, serverTick: buffer.at(-1)?.tick ?? null, ack, snapshotCount, interpolationTick,
       bufferedSnapshots: buffer.length, pendingInputs: pendingInputs.length, lastReceivedAt,
-      predicted: prediction !== null,
+      predicted: prediction !== null && hasFreshSnapshot(),
     }),
   };
 }

@@ -62,12 +62,24 @@ async function makeDropRelay() {
   };
 }
 
-async function boot(name, { roleId = 'gpt', droppable = false, first = false } = {}) {
+async function boot(name, { roleId = 'gpt', droppable = false, first = false, gate } = {}) {
   const context = await browser.newContext({ viewport: first ? { width: 1280, height: 800 } : { width: 1000, height: 625 } });
   const page = await context.newPage();
   const client = { context, page, name, roleId, errors: [], frames: [], sent: [], connections: 0 };
   clients.push(client);
   page.on('pageerror', (err) => client.errors.push(err.message));
+  if (gate) await page.routeWebSocket((url) => url.pathname === roomPath, (socket) => {
+    const connection = ++gate.connections;
+    const upstream = socket.connectToServer();
+    upstream.onMessage((payload) => {
+      if (gate.blocked === connection && JSON.parse(String(payload)).type === 'snapshot') return;
+      socket.send(payload);
+    });
+    socket.onMessage((payload) => {
+      if (JSON.parse(String(payload)).type === 'input') gate.inputs++;
+      upstream.send(payload);
+    });
+  });
   page.on('websocket', (socket) => {
     if (new URL(socket.url()).pathname !== roomPath) return;
     client.connections += 1;
@@ -228,6 +240,81 @@ async function bossChat(sender, host) {
   console.log(`由访客递话，服务端统一裁决鱼价 ×${authority.boss.priceMultiplier}`);
 }
 
+async function setHidden(page, hidden) {
+  await page.evaluate((hidden) => {
+    if (hidden) Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    else Reflect.deleteProperty(document, 'hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, hidden);
+}
+
+async function waitForSpectator(client, focusId) {
+  await wait(client, () => window.fatfishDebug.network().mode === 'spectating'
+    && window.fatfishDebug.network().serverTick !== null, null, 8000);
+  const observer = await debug(client);
+  assert.equal(observer.playerId, null);
+  assert.equal(observer.focusId, focusId);
+  const before = client.sent.filter((type) => type === 'input').length;
+  await client.page.keyboard.press('KeyF');
+  await client.page.waitForTimeout(120);
+  assert.equal(client.sent.filter((type) => type === 'input').length, before);
+}
+
+async function verifySnapshotSilence() {
+  const gate = { blocked: 0, connections: 0, inputs: 0 };
+  const client = await boot('守仓工友', { gate });
+  await occupy(client);
+  const owner = await playing(client);
+  const { page } = client;
+
+  gate.blocked = 1;
+  const firstTick = (await debug(client)).serverTick;
+  await page.waitForTimeout(600);
+  const brief = await debug(client);
+  assert.equal(brief.mode, 'playing');
+  assert.equal(brief.serverTick, firstTick);
+  assert.equal(brief.predicted, false);
+  assert.equal(gate.connections, 1);
+  gate.blocked = 0;
+  await wait(client, (tick) => window.fatfishDebug.network().serverTick > tick, firstTick);
+
+  gate.blocked = 1;
+  await setHidden(page, true);
+  await page.waitForTimeout(2900);
+  assert.equal((await debug(client)).mode, 'playing');
+  await setHidden(page, false);
+  await page.waitForTimeout(450);
+  assert.equal((await debug(client)).mode, 'playing');
+  assert.equal(gate.connections, 1);
+  const hiddenTick = (await debug(client)).serverTick;
+  gate.blocked = 0;
+  await wait(client, (tick) => window.fatfishDebug.network().serverTick > tick, hiddenTick);
+
+  gate.blocked = 1;
+  const start = performance.now();
+  await wait(client, () => window.fatfishDebug.network().mode === 'reconnecting', null, 5000);
+  const detectedMs = Math.round(performance.now() - start);
+  assert(detectedMs >= 2000 && detectedMs < 4000);
+  await waitForSpectator(client, owner.playerId);
+  assert.equal(gate.connections, 2);
+  await client.context.close();
+
+  const openingGate = { blocked: 1, connections: 0, inputs: 0 };
+  const missing = await boot('首帧工友', { gate: openingGate });
+  await occupy(missing);
+  await wait(missing, () => window.fatfishDebug.network().mode === 'playing');
+  const welcome = await debug(missing);
+  assert.equal(welcome.snapshotCount, 0);
+  await missing.page.keyboard.press('KeyF');
+  await wait(missing, () => window.fatfishDebug.network().mode === 'reconnecting', null, 5000);
+  assert.equal(openingGate.inputs, 0);
+  await waitForSpectator(missing, welcome.playerId);
+  assert.equal(openingGate.connections, 2);
+  await missing.context.close();
+
+  console.log(`短间断和后台页面继续留在房间。前台快照停收 ${detectedMs}ms 后重连观战，首帧缺失也走观战恢复。`);
+}
+
 try {
   const host = await boot('阿浪', { first: true });
   if (pagesOnly) {
@@ -313,6 +400,8 @@ try {
     await guest.page.locator('[data-room-leave]').click();
     await wait(guest, () => window.fatfishDebug.network().mode === 'local');
     console.log('4 人满房、切回页面追上权威快照、断线补位、自动重连观战与空位重新加入均通过');
+    await Promise.all(clients.map(({ context }) => context.close()));
+    await verifySnapshotSilence();
   }
   for (const client of clients) assert.deepEqual(client.errors, [], `page errors: ${client.name}`);
 } finally {

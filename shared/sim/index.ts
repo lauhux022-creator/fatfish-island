@@ -11,6 +11,7 @@ import { buildAhead } from './construction';
 import { Defense } from './defense';
 import { resolveMovement, yawRotation } from './prediction';
 import { seededRandom } from './random';
+import { castChargeSeconds, isShopItemId, SHOP, weaponStats, type ShopEquipment, type ShopItemId } from './shop';
 import { emptyInput } from './types';
 import type {
   BossLine, CrateView, FishKind, FishState, HookPhase, HookView, PlayerMetrics, PlayerView, Pose, RagdollLimb,
@@ -63,6 +64,8 @@ interface Hook {
   bait: Actor | null;
   baitPlayerId: string | null;
   baitLanding: Vec3 | null;
+  paidBait: boolean;
+  aimedAtSea: boolean;
   start: Vec3 | null;
   deadline: number;
 }
@@ -104,6 +107,7 @@ interface Actor {
   hook: Hook;
   baitedBy: Actor | null;
   cash: number;
+  equipment: ShopEquipment;
   sold: number;
   shiftCash: number;
   shiftSold: number;
@@ -176,7 +180,8 @@ function launchVector(origin: Vec3, destination: Vec3, seconds: number): Vec3 {
 function newHook(): Hook {
   return {
     phase: 'idle', body: null, charge: 0, taps: 0, required: 1,
-    target: null, swimmer: null, bait: null, baitPlayerId: null, baitLanding: null, start: null, deadline: 0,
+    target: null, swimmer: null, bait: null, baitPlayerId: null, baitLanding: null, paidBait: false, aimedAtSea: false,
+    start: null, deadline: 0,
   };
 }
 
@@ -306,6 +311,7 @@ class IslandSimulation {
       if (actorInput.swingPressed) this.swing(actor);
       if (actorInput.interactPressed) this.interact(actor);
       if (actorInput.build) this.build(actor, actorInput.build);
+      if (actorInput.buy) this.buy(actor, actorInput.buy);
       if (actorInput.revivePressed) this.payRevive(actor);
     }
 
@@ -583,6 +589,27 @@ class IslandSimulation {
     this.notices.set(actor.id, { id: ++this.noticeId, text, tone, cue });
   }
 
+  private canShop(actor: Actor, position: Vec3) {
+    return this.phase === 'day' && !this.shiftPaused && !actor.ghostPosition && !actor.ragdoll.length
+      && !actor.baitedBy && actor.groundContact && distance(position, SHOP.position) <= SHOP.radius;
+  }
+
+  private buy(actor: Actor, id: ShopItemId) {
+    if (!isShopItemId(id) || !this.canShop(actor, actor.body.translation())) return;
+    const item = SHOP.items[id];
+    if (actor.equipment[id]) {
+      this.announce(actor, id === 'bait' ? '鱼饵盒里还有一份' : `已经买过${item.name}`);
+      return;
+    }
+    if (actor.cash < item.price) {
+      this.announce(actor, `${item.name}要 ¥${item.price}，零钱还差一点`, 'bad');
+      return;
+    }
+    actor.cash -= item.price;
+    actor.equipment[id] = true;
+    this.announce(actor, `买到${item.name} · 花了 ¥${item.price}`, 'good');
+  }
+
   private makeActor({ id, bot, spawn }: (typeof CREW)[number], roleId: WorkerRoleId): Actor {
     const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(spawn.x, spawn.y, spawn.z).setCcdEnabled(true).lockRotations());
@@ -594,6 +621,7 @@ class IslandSimulation {
       yaw: 0, aim: { x: 0, z: -1 }, groundContact: true, moveSpeed: 0, swingUntil: 0, castUntil: 0,
       ragdoll: [], recoverTick: 0, nextTripAt: 0, carrying: null, hook: newHook(),
       baitedBy: null, cash: 0, sold: 0, shiftCash: 0, shiftSold: 0, metrics: newActorMetrics(), optimization: false,
+      equipment: { rod: false, pan: false, bait: false },
       shiftBossBonus: 0, shiftBossFine: 0, favor: 0, memory: [], giftedBait: false, swallowed: false, lastSwallowedDay: 0,
       cycleCash: 0, cycleSold: 0, ghostPosition: null, ghostVelocity: { x: 0, y: 0, z: 0 }, nextPrankAt: 0, revivePaid: 0,
     };
@@ -605,15 +633,18 @@ class IslandSimulation {
     const body = ragdoll[0]?.body ?? actor.body;
     const hook = actor.hook;
     const ghost = actor.ghostPosition !== null;
+    const position = actor.ghostPosition ? { ...actor.ghostPosition } : body.translation();
     const velocity = ghost ? { ...actor.ghostVelocity } : body.linvel();
     const speed = ragdoll.length ? 0 : Math.hypot(velocity.x, velocity.z);
     const target: HookView['target'] = hook.bait ? 'player' : hook.target ? (isFish(hook.target) ? 'fish' : 'crate') : null;
     return {
       id, roleId, name, bot, cash, sold, shiftCash, shiftSold, optimization, yaw,
       animation: this.animationFor(actor, speed),
-      position: actor.ghostPosition ? { ...actor.ghostPosition } : body.translation(),
+      position,
       ghost,
       revivePaid: actor.revivePaid,
+      equipment: { ...actor.equipment },
+      shopOpen: this.canShop(actor, position),
       favor: actor.favor,
       memory: actor.memory.join('，'),
       giftedBait: actor.giftedBait,
@@ -623,7 +654,7 @@ class IslandSimulation {
       velocity,
       speed,
       grounded: !ghost && actor.groundContact && !ragdoll.length,
-      swing: clamp((actor.swingUntil - this.time) / PLAY.swingSeconds, 0, 1),
+      swing: clamp((actor.swingUntil - this.time) / (ghost ? PLAY.swingSeconds : weaponStats(actor.equipment).swingSeconds), 0, 1),
       ragdoll: actor.recoverTick ? (actor.recoverTick - this.tick) * STEP_SECONDS : 0,
       parts: ragdoll.map(({ limb, body }) => ({ limb, ...pose(body) })),
       carrying: actor.carrying?.id ?? null,
@@ -919,7 +950,7 @@ class IslandSimulation {
       actor.hook.phase = 'charging';
     }
     if (actor.hook.phase === 'charging') {
-      if (input.castHeld) actor.hook.charge = Math.min(1, actor.hook.charge + STEP_SECONDS / FISHING.chargeSeconds);
+      if (input.castHeld) actor.hook.charge = Math.min(1, actor.hook.charge + STEP_SECONDS / castChargeSeconds(actor.equipment));
       if (input.castReleased) {
         actor.castUntil = this.time + WORKER_MOTION.castSeconds;
         this.cast(actor, input.aim);
@@ -946,6 +977,10 @@ class IslandSimulation {
     this.world.createCollider(RAPIER.ColliderDesc.ball(0.1).setSensor(true), actor.hook.body);
     actor.hook.phase = 'flying';
     actor.hook.deadline = this.time + seconds + 0.2;
+    actor.hook.aimedAtSea = canFish(aim ?? {
+      x: position.x + actor.aim.x * FISHING.maxRange,
+      z: position.z + actor.aim.z * FISHING.maxRange,
+    });
   }
 
   private crateByHook(actor: Actor) {
@@ -1045,12 +1080,15 @@ class IslandSimulation {
       hook.body.setTranslation({ ...position, y: ISLAND.seaY + 0.11 }, true);
       hook.phase = 'waiting';
       const nearSpot = FISHING.goodSpots.some((spot) => distance(spot, position) <= FISHING.goodSpotRadius);
+      hook.paidBait = actor.equipment.bait && !actor.giftedBait;
+      const baitReduction = actor.giftedBait ? BOSS.giftBiteReduction : hook.paidBait ? SHOP.items.bait.biteReduction : 0;
       hook.deadline = this.time + FISHING.biteMin + actor.random() * (FISHING.biteMax - FISHING.biteMin)
-        + (nearSpot ? 0 : FISHING.offSpotDelay) - (actor.giftedBait ? BOSS.giftBiteReduction : 0);
+        + (nearSpot ? 0 : FISHING.offSpotDelay) - baitReduction;
       actor.giftedBait = false;
     } else if (landedOnBeach || this.time > hook.deadline) {
+      const threwShort = landedOnBeach && hook.aimedAtSea && hook.charge < 1;
       this.clearHook(actor);
-      this.announce(actor, '空钩！瞄准岸外的海面', 'bad');
+      this.announce(actor, threwShort ? '抛短了！蓄满再松手' : '空钩！瞄准岸外的海面', 'bad');
     }
   }
 
@@ -1126,7 +1164,11 @@ class IslandSimulation {
     actor.hook.swimmer = null;
     actor.hook.target = target;
     actor.hook.phase = 'bite';
-    actor.hook.required = isCatch ? FISH[target.kind].taps : FISHING.crateTaps;
+    if (isCatch) {
+      const taps = FISH[target.kind].taps;
+      actor.hook.required = actor.equipment.rod ? Math.max(1, taps - SHOP.items.rod.fewerTaps) : taps;
+      if (actor.hook.paidBait) actor.equipment.bait = false;
+    } else actor.hook.required = FISHING.crateTaps;
     actor.hook.deadline = this.time + FISHING.lineSlackSeconds;
     actor.hook.start = target.body.translation();
     target.state = 'hooked';
@@ -1211,11 +1253,12 @@ class IslandSimulation {
 
   private swing(actor: Actor) {
     if (this.time < actor.swingUntil || actor.carrying) return;
-    actor.swingUntil = this.time + PLAY.swingSeconds;
+    const weapon = weaponStats(actor.equipment);
+    actor.swingUntil = this.time + weapon.swingSeconds;
     const position = actor.body.translation();
-    if ((this.phase === 'night' || this.phase === 'boss') && this.defense.hit(position, actor.aim)) return;
+    if ((this.phase === 'night' || this.phase === 'boss') && this.defense.hit(position, actor.aim, weapon.reach)) return;
     let hit: Fish | undefined;
-    let reach: number = PLAY.swingReach;
+    let reach: number = weapon.reach;
     for (const fish of this.fish) {
       if (fish.state !== 'flopping') continue;
       const point = fish.body.translation();
@@ -1259,7 +1302,7 @@ class IslandSimulation {
       + (airborne ? PLAY.airBonus : 0) + (combo ? PLAY.comboBonus : 0));
     this.touchFish(hit, actor);
     hit.lastHit = this.time;
-    hit.hits += 1;
+    hit.hits += weapon.fishDamage;
 
     const stunned = hit.hits >= FISH[hit.kind].hits;
     const impulse = stunned ? PLAY.fishStunHit : PLAY.fishHit;

@@ -46,7 +46,9 @@ async function boot(seed, { day = 3, shiftSeconds, nightSeconds, virtual = true 
   assert.equal(booted.players.filter(({ bot }) => bot).length, 3);
   assert.deepEqual(new Set(booted.players.map(({ roleId }) => roleId)), new Set(['claude', 'gpt', 'grok', 'kimi']));
   assert.equal(sockets.length, 0);
-  assert.equal(await page.locator('[data-version]').textContent(), '0.5.0');
+  const version = await page.locator('[data-version]').textContent();
+  assert.match(version ?? '', /^\d+\.\d+\.\d+$/);
+  if (process.env.EXPECTED_VERSION) assert.equal(version, process.env.EXPECTED_VERSION);
   if (process.env.EXPECTED_COMMIT) {
     assert.equal(await page.locator('[data-commit]').textContent(), process.env.EXPECTED_COMMIT);
   }
@@ -122,7 +124,7 @@ async function localSuccess() {
     assert.equal(dusk.day, 3);
     assert.equal(sockets.length, 0);
     assert.equal(await page.locator('[data-control="build:fence"]').isVisible(), true);
-    console.log('Pages v0.5.0：固定种子、三名机器人、键盘移位与入夜建造入口，无房间连接。');
+    console.log('Pages：固定种子、三名机器人、键盘移位与入夜建造入口，无房间连接。');
     return context.close();
   }
   await runUntil(page, (s) => s.time > 25 && s.campaign.warehouse.stock > 0, 44, 1000);

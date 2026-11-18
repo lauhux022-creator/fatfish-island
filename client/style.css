@@ -1124,3 +1124,66 @@ h1 small {
   .game[data-campaign-phase="night"] .task, .game[data-campaign-phase="boss"] .task,
   .game[data-ghost="true"] .task { bottom: calc(191px + env(safe-area-inset-bottom)); }
 }
+
+.gear-shop {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: calc(49px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: min(470px, calc(100% - 24px));
+  padding: 10px;
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  background: var(--cream);
+  color: var(--ink);
+  box-shadow: var(--panel-shadow);
+}
+.gear-shop header {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 9px;
+}
+.gear-shop h2 { margin: 0; font-size: 18px; font-weight: 900; }
+.gear-shop header > strong { color: #72502b; font-variant-numeric: tabular-nums; font-weight: 900; }
+.gear-shop-close {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 1px solid #797e60;
+  border-radius: 5px;
+  background: #eee1bd;
+  color: var(--ink);
+  font-size: 19px;
+}
+.gear-shop-location { margin: 0 0 8px; color: #52634c; font-size: 12px; font-weight: 750; }
+.gear-shop-items { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.gear-shop-items button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
+  gap: 2px 5px;
+  min-height: 62px;
+  border: 1px solid #786748;
+  border-radius: 5px;
+  padding: 6px;
+  background: #ffe2a8;
+  color: var(--ink);
+  text-align: left;
+  font-size: 12px;
+  -webkit-tap-highlight-color: transparent;
+}
+.gear-shop-items button:hover:not(:disabled) { background: #ffd087; }
+.gear-shop-items button:disabled { cursor: default; background: #ece2c7; color: #5c6556; }
+.gear-shop-items button[data-owned="true"] { background: #dbe6c8; color: #355943; }
+.gear-shop-items button b { color: #743e21; font-variant-numeric: tabular-nums; }
+.gear-shop-items button small, .gear-shop-items button em { grid-column: 1 / -1; font-size: 10px; }
+.gear-shop-items button em { font-style: normal; font-weight: 850; }
+.gear-shop-toggle[data-nearby="true"] { background: #f0b25e; color: #163633; }
+.game:has(.gear-shop:not([hidden])) .notice { top: 26%; z-index: 2; }
+@media (pointer: coarse) {
+  .gear-shop { bottom: calc(143px + env(safe-area-inset-bottom)); }
+  .gear-shop-close { min-width: 36px; min-height: 36px; }
+  .gear-shop-items button { min-height: 67px; font-size: 11px; }
+}

@@ -197,6 +197,8 @@ function makeDock(parent: T.Group, kit: GeometryKit) {
   for (const x of [-1.19, 1.19]) {
     for (const z of [-0.66, 0.67]) kit.box(store, 0x895d49, x, 0.95, z, 0.124, 1.91, 0.124);
   }
+  kit.box(store, p.darkTeal, 0, 1.78, 0.91, 1.52, 0.39, 0.11);
+  label(store, '渔 具 摊', 1.46, 0.35, 0, 1.78, 0.973);
   kit.box(store, 0x81543b, 0, 0.52, -0.48, 2.2, 0.89, 0.394);
   kit.box(store, 0xbe885a, 0, 0.95, -0.47, 2.29, 0.14, 0.53);
   kit.box(store, 0xb67e4a, -0.73, 0.19, 0.40, 0.48, 0.40, 0.46);

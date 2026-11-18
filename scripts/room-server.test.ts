@@ -5,10 +5,22 @@ import { test } from 'node:test';
 import WebSocket from 'ws';
 import { attachRoomServer } from '../server/rooms';
 import { DeepSeekBrain } from '../server/fish-brain';
+import { readRoomMessage } from '../server/room-wire';
 import {
   ROOM_SOCKET_PATH, type RoomClientMessage, type RoomServerMessage, type RoomSnapshotMessage,
 } from '../shared/net/types';
 import { emptyInput } from '../shared/sim/types';
+
+test('room input accepts only shop item IDs and preserves the requested item', () => {
+  for (const buy of ['rod', 'pan', 'bait'] as const) {
+    const packet = readRoomMessage(JSON.stringify({ type: 'input', seq: 1, input: { ...emptyInput, buy } }));
+    assert.equal(packet?.type, 'input');
+    assert.equal(packet.input.buy, buy);
+  }
+  for (const buy of ['unlisted', ['rod', 'pan'], null]) {
+    assert.equal(readRoomMessage(JSON.stringify({ type: 'input', seq: 1, input: { ...emptyInput, buy } })), null);
+  }
+});
 
 test('room authority seats players, serves one shared DeepSeek decision, and resumes spectators', { timeout: 12000 }, async () => {
   let modelCalls = 0;

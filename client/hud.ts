@@ -3,6 +3,7 @@ import { crewReaction } from '../shared/fish-brain/reactions';
 import { bossBust, crewBust, updatePortrait } from './assets/portraits';
 import { BUILD_KINDS } from '../shared/sim/campaign-types';
 import { CAMPAIGN, ISLAND, PLAY, SHIFT } from '../shared/sim/config';
+import { SHOP, SHOP_ITEM_IDS } from '../shared/sim/shop';
 import type { FishView, ShiftEntry, SimSnapshot } from '../shared/sim/types';
 import { crewColor } from './crew-colors';
 
@@ -22,13 +23,19 @@ interface Guide {
 
 const firstCast: Guide = {
   title: '上工了，先甩一竿',
-  desktop: '瞄准海上的浅金涟漪，按住左键蓄力，松手抛竿。',
-  touch: '轻点浅金涟漪，按住「投／收」蓄力，松手抛竿。',
+  desktop: '瞄准海上的浅金涟漪，左键蓄满（约 1 秒）再松开。',
+  touch: '轻点浅金涟漪，按住「投／收」蓄满再松开。',
 };
 
 const nextCast: Guide = {
   ...firstCast,
   title: '鱼款到手，再甩一竿',
+};
+
+const stunFish: Guide = {
+  title: '鱼要跑路！',
+  desktop: '追着鱼瞄准，连按 F 挥桨，直到鱼晕过去。',
+  touch: '点鱼瞄准，连按「挥桨」。鱼弹远了就追上去。',
 };
 
 function fishingGuide(snapshot: SimSnapshot): Guide | undefined {
@@ -37,7 +44,9 @@ function fishingGuide(snapshot: SimSnapshot): Guide | undefined {
 
   switch (hook.phase) {
     case 'charging':
-      return { title: '蓄力中', desktop: '松开左键抛竿', touch: '松开「投／收」抛竿', meter: hook.charge };
+      return hook.charge >= 0.99
+        ? { title: '蓄力已满', desktop: '松开左键抛竿。', touch: '松开「投／收」抛竿。', meter: hook.charge }
+        : { title: '蓄力中', desktop: '等落点圈越过海岸，或把蓄力条拉满。', touch: '等落点圈越过海岸再松手。', meter: hook.charge };
     case 'flying':
       return hook.target === 'player'
         ? { title: '队友饵起飞！', desktop: '', touch: '' }
@@ -123,6 +132,15 @@ function guideFor(snapshot: SimSnapshot): Guide {
   const distanceTo = (item: FishView) =>
     Math.hypot(item.position.x - player.position.x, item.position.z - player.position.z);
   const nearby = (item: FishView) => distanceTo(item) < 4.5 && item.position.z >= ISLAND.shoreZ - 0.6;
+  if (fish.some((item) => item.caughtBy === player.id && item.state === 'flopping' && nearby(item))) return stunFish;
+  const unfinishedCatch = fish.some((item) => item.caughtBy === player.id && item.state === 'stunned' && nearby(item));
+  if (!unfinishedCatch && sold > 0 && !SHOP_ITEM_IDS.some((id) => player.equipment?.[id])) {
+    return {
+      title: '鱼款到手，渔具摊开张',
+      desktop: '去左侧条纹棚，按 Q 看竿、锅和鱼饵。',
+      touch: '去左侧条纹棚，点「渔具摊」就能买。',
+    };
+  }
   if (fish.some((item) => item.state === 'stunned' && nearby(item))) {
     return {
       title: '趁鱼晕着，快抬走',
@@ -141,11 +159,7 @@ function guideFor(snapshot: SimSnapshot): Guide {
   }
 
   if (fish.some((item) => item.state === 'flopping' && nearby(item))) {
-    return {
-      title: '鱼要跑路！',
-      desktop: '追上去，瞄准鱼按 F 挥桨。',
-      touch: '追上去，轻点鱼瞄准，再按「挥桨」。',
-    };
+    return stunFish;
   }
 
   return sold > 0 ? nextCast : firstCast;
@@ -175,7 +189,7 @@ const markup = `
     </div>
     <div class="account">
       <section class="ledger" aria-label="渔场账本">
-        <div class="money"><span>累计入账</span><strong data-cash>¥0</strong></div>
+        <div class="money"><span>可用鱼款</span><strong data-cash>¥0</strong></div>
         <div class="sales"><span>已交渔获</span><strong data-sold>0 <small>尾</small></strong></div>
       </section>
       <button class="board-toggle" type="button" aria-controls="standings" aria-expanded="false" data-standings-toggle>绩效榜</button>
@@ -222,7 +236,7 @@ const markup = `
       <strong data-task>渔场开门中</strong>
       <p class="desktop-guide" data-desktop></p>
       <p class="touch-guide" data-touch></p>
-      <progress title="当前动作进度" max="1" value="0" hidden></progress>
+      <progress data-task-meter aria-label="当前动作进度" max="1" value="0" hidden></progress>
     </div>
   </aside>
   <aside class="campaign-controls" aria-label="守仓和还魂操作" data-campaign-controls hidden>
@@ -261,6 +275,23 @@ const markup = `
     <p class="boss-effect" data-boss-effect hidden></p>
     <p class="boss-memory" data-boss-memory hidden></p>
   </form>
+  <section class="gear-shop" id="gear-shop" data-shop-panel aria-labelledby="gear-shop-title" hidden>
+    <header>
+      <h2 id="gear-shop-title">渔具摊</h2>
+      <strong data-shop-cash></strong>
+      <button type="button" class="gear-shop-close" data-shop-close aria-label="关闭渔具摊">×</button>
+    </header>
+    <p class="gear-shop-location" data-shop-info></p>
+    <div class="gear-shop-items">
+      ${SHOP_ITEM_IDS.map((id) => {
+        const item = SHOP.items[id];
+        return `<button type="button" data-shop-buy="${id}">
+          <strong>${item.name}</strong><b>¥${item.price}</b>
+          <small>${item.description}</small><em data-shop-item-state hidden></em>
+        </button>`;
+      }).join('')}
+    </div>
+  </section>
   <div class="hud-foot">
     <div class="key-legend" aria-label="快捷键">
       <span><kbd>W A S D</kbd> 移动</span>
@@ -269,6 +300,9 @@ const markup = `
       <span><kbd>E</kbd> 搬／抢／扔</span>
       <span><kbd>空格</kbd> 跳</span>
     </div>
+    <button class="boss-chat-toggle gear-shop-toggle" type="button" aria-controls="gear-shop" aria-expanded="false" data-shop-toggle hidden>
+      <kbd aria-hidden="true">Q</kbd> 渔具摊
+    </button>
     <button class="boss-chat-toggle" type="button" aria-controls="boss-chat" aria-expanded="false" data-boss-chat-toggle>
       <kbd aria-hidden="true">T</kbd> 找老板
     </button>
@@ -291,7 +325,8 @@ const markup = `
           <li><b>截胡</b> 靠近并瞄准别人手里或半空中的鱼，点「搬／扔」抢。</li>
           <li><b>队友饵</b> 点队友瞄准并甩钩，再点海面按「投／收」。活饵渔获售价更高，饵员拿不到绩效。</li>
         </ol>
-        <p>夜里按 1／2／3 建造，船桨可以赶走海怪。有人被吃后可按 R 凑还魂费。</p>
+        <p class="desktop-guide">左侧渔具摊按 Q 买装备。夜里按 1／2／3 建造守仓。每三天达标就迎战螃蟹，掉队成幽灵后可按 R 凑还魂费。</p>
+        <p class="touch-guide">左侧渔具摊可买装备。夜里点工事按钮守仓。每三天达标就迎战螃蟹，幽灵可点「还魂」交钱。</p>
       </div>
     </details>
   </div>
@@ -342,6 +377,15 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   const bossFavor = ui('[data-boss-favor]');
   const bossMemory = ui<HTMLElement>('[data-boss-memory]');
   const bossEffect = ui<HTMLElement>('[data-boss-effect]');
+  const gearShop = ui<HTMLElement>('[data-shop-panel]');
+  const shopToggle = ui<HTMLButtonElement>('[data-shop-toggle]');
+  const shopClose = ui<HTMLButtonElement>('[data-shop-close]');
+  const shopCash = ui('[data-shop-cash]');
+  const shopInfo = ui('[data-shop-info]');
+  const shopItems = SHOP_ITEM_IDS.map((id) => {
+    const button = ui<HTMLButtonElement>(`[data-shop-buy="${id}"]`);
+    return { id, button, state: button.querySelector<HTMLElement>('[data-shop-item-state]')! };
+  });
   const interview = ui<HTMLElement>('[data-shift-interview]');
   const interviewBoss = ui<HTMLImageElement>('[data-interview-boss]');
   const interviewWinner = ui<HTMLImageElement>('[data-interview-winner]');
@@ -361,7 +405,7 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   const title = ui('[data-task]');
   const desktop = ui<HTMLParagraphElement>('[data-desktop]');
   const touch = ui<HTMLParagraphElement>('[data-touch]');
-  const meter = ui<HTMLProgressElement>('progress');
+  const meter = ui<HTMLProgressElement>('[data-task-meter]');
   const notice = ui<HTMLParagraphElement>('[data-notice]');
   const error = ui<HTMLParagraphElement>('[data-error]');
   const debug = ui<HTMLElement>('[data-debug]');
@@ -406,10 +450,43 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   let speakUntil = 0;
   let composing = false;
 
+  function setShopOpen(open: boolean) {
+    if (open) {
+      setChatOpen(false);
+      manual.open = false;
+    }
+    gearShop.hidden = !open;
+    shopToggle.setAttribute('aria-expanded', String(open));
+    task.hidden = open || !bossForm.hidden;
+    if (open && latest) {
+      updateShop(latest);
+      shopClose.focus({ preventScroll: true });
+    }
+  }
+
+  function shopAllowed(snapshot: SimSnapshot) {
+    return snapshot.campaign.phase === 'day' && !snapshot.shiftPaused && !snapshot.player.ghost
+      && root.dataset.roomMode !== 'spectating' && root.dataset.roomMode !== 'reconnecting';
+  }
+
+  function toggleShop() {
+    if (!latest || shopToggle.hidden || !shopAllowed(latest)) return false;
+    setShopOpen(gearShop.hidden);
+    return true;
+  }
+
+  function closeShop() {
+    if (gearShop.hidden || root.querySelector('dialog:modal')) return false;
+    setShopOpen(false);
+    shopToggle.focus({ preventScroll: true });
+    return true;
+  }
+
   function setChatOpen(open: boolean) {
+    if (open && !gearShop.hidden) setShopOpen(false);
     bossForm.hidden = !open;
     bossToggle.setAttribute('aria-expanded', String(open));
-    task.hidden = open;
+    task.hidden = open || !gearShop.hidden;
   }
 
   function focusChat() {
@@ -423,6 +500,8 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
     if (bossForm.hidden) focusChat();
     else setChatOpen(false);
   });
+  shopToggle.addEventListener('click', toggleShop);
+  shopClose.addEventListener('click', closeShop);
   bossInput.addEventListener('compositionstart', () => { composing = true; });
   bossInput.addEventListener('compositionend', () => { composing = false; });
   bossForm.addEventListener('keydown', (event) => {
@@ -614,6 +693,25 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   let lastNotice: number | null = null;
   let noticeUntil = 0;
 
+  function updateShop(snapshot: SimSnapshot) {
+    const { player } = snapshot;
+    const allowed = shopAllowed(snapshot);
+    if (!allowed && !gearShop.hidden) setShopOpen(false);
+    shopToggle.hidden = !allowed || (!player.sold && !player.shopOpen && gearShop.hidden);
+    shopToggle.dataset.nearby = String(Boolean(player.shopOpen));
+    if (gearShop.hidden) return;
+    writeText(shopCash, `¥${player.cash}`);
+    writeText(shopInfo, player.shopOpen ? '点选装备即可购买' : '走到岛左侧的条纹棚旁购买');
+    for (const { id, button, state } of shopItems) {
+      const owned = Boolean(player.equipment?.[id]);
+      const affordable = player.cash >= SHOP.items[id].price;
+      button.disabled = !player.shopOpen || owned || !affordable;
+      button.dataset.owned = String(owned);
+      state.hidden = !owned && (!player.shopOpen || affordable);
+      if (!state.hidden) writeText(state, owned ? (id === 'bait' ? '鱼饵待用' : '已装备') : '鱼款不足');
+    }
+  }
+
   function updateCampaign(snapshot: SimSnapshot) {
     const { campaign, player, players, shiftPaused } = snapshot;
     const { phase, cycle, warehouse: { lostFish, lostValue, stock } } = campaign;
@@ -654,6 +752,7 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
     const nextRoomCode = root.dataset.roomCode ?? '';
     if (roomCode !== nextRoomCode) {
       roomCode = nextRoomCode;
+      if (!gearShop.hidden) setShopOpen(false);
       lastLineId = undefined;
       lastNotice = null;
       speakUntil = 0;
@@ -671,6 +770,7 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
     writeText(clock, `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`);
     updateKpi(snapshot);
     updateCampaign(snapshot);
+    updateShop(snapshot);
     updateBoss(snapshot);
     updateStandings(snapshot);
     writeText(cash, `¥${snapshot.cash}`);
@@ -754,5 +854,5 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
     writeText(error, message);
   }
 
-  return { canvas, update, setError, focusChat, setBossAnchor, isBossSpeaking: () => !bossBubble.hidden };
+  return { canvas, update, setError, focusChat, toggleShop, closeShop, setBossAnchor, isBossSpeaking: () => !bossBubble.hidden };
 }
