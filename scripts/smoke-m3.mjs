@@ -48,12 +48,15 @@ async function openShift({ short, day = 3 } = {}) {
   url.search = new URLSearchParams({ seed: 'm2-review', day: String(day), debug: '1' }).toString();
   if (short) url.searchParams.set('shiftSeconds', String(short));
   assert.equal((await page.goto(url.href, { waitUntil: 'domcontentloaded' }))?.status(), 200);
+  await page.waitForLoadState('networkidle', { timeout: 45000 });
   for (let tries = 0; tries < 100; tries++) {
     if (await read()) break;
     await page.clock.runFor(100);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  assert.equal(await page.locator('[data-version]').textContent(), '0.3.0');
+  const version = await page.locator('[data-version]').textContent();
+  assert.match(version, /^\d+\.\d+\.\d+$/);
+  if (process.env.EXPECTED_VERSION) assert.equal(version, process.env.EXPECTED_VERSION);
   if (process.env.EXPECTED_COMMIT) {
     assert.equal(await page.locator('[data-commit]').textContent(), process.env.EXPECTED_COMMIT);
   }

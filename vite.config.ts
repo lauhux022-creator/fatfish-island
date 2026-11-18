@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
+import { ROOM_SOCKET_PATH } from './shared/net/types.ts';
 import pkg from './package.json' with { type: 'json' };
 
 function commitShortHash(): string {
@@ -15,10 +16,18 @@ function commitShortHash(): string {
   }
 }
 
-export default defineConfig({
-  base: '/fatfish-island/',
-  define: {
-    __GAME_VERSION__: JSON.stringify(pkg.version),
-    __COMMIT_SHA__: JSON.stringify(commitShortHash()),
-  },
+export default defineConfig(({ mode }) => {
+  const { PORT = '8797', ROOM_HOST: host = '127.0.0.1' } = loadEnv(mode, process.cwd(), ['PORT', 'ROOM_HOST']);
+  const backendHost = ['0.0.0.0', '::'].includes(host) ? '127.0.0.1'
+    : host.includes(':') ? `[${host}]` : host;
+  const proxy = { [ROOM_SOCKET_PATH]: { target: `http://${backendHost}:${PORT}`, ws: true } };
+  return {
+    base: '/fatfish-island/',
+    server: { host, proxy },
+    preview: { host, proxy },
+    define: {
+      __GAME_VERSION__: JSON.stringify(pkg.version),
+      __COMMIT_SHA__: JSON.stringify(commitShortHash()),
+    },
+  };
 });

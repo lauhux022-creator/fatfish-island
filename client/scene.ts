@@ -288,8 +288,8 @@ export function createScene(canvas: HTMLCanvasElement) {
     for (const [index, streak] of shockArcs.entries()) streak.material.opacity = Math.sin(swing * Math.PI) * (0.5 - index * 0.11);
   }
 
-  function animateCrew(snapshot: SimSnapshot, delta: number, seconds: number) {
-    localPlayerId = snapshot.player.id;
+  function animateCrew(snapshot: SimSnapshot, delta: number, seconds: number, selfId: string | null) {
+    localPlayerId = selfId ?? '';
     crewViews = snapshot.players;
     const badgeLayout: { x: number; y: number; width: number; height: number }[] = [];
     const unitsPerPixel = 2 * Math.tan(T.MathUtils.degToRad(camera.fov / 2)) / height;
@@ -303,6 +303,7 @@ export function createScene(canvas: HTMLCanvasElement) {
       animateHook(view, worker, seconds);
 
       const badge = worker.badge;
+      badge.setName(view.id === localPlayerId ? '你' : view.name);
       badge.setStatus(view.baitedBy ? '当饵中' : view.optimization ? '待优化' : '');
       badge.resize(unitsPerPixel);
       const head = view.parts.find(part => part.limb === 'head')?.position;
@@ -444,12 +445,12 @@ export function createScene(canvas: HTMLCanvasElement) {
     return project(island.bossSpeechAnchor.getWorldPosition(speechPoint));
   }
 
-  function render(snapshot: SimSnapshot, elapsed: number, bossSpeaking: boolean) {
+  function render(snapshot: SimSnapshot, elapsed: number, bossSpeaking: boolean, selfId: string | null = snapshot.player.id) {
     const delta = previous < 0 ? 0 : Math.min(0.1, Math.max(0, elapsed - previous));
     previous = elapsed;
     frameCamera(snapshot, delta);
     island.animate(elapsed, snapshot.boss.line?.emotion ?? 'calm', bossSpeaking);
-    animateCrew(snapshot, delta, elapsed);
+    animateCrew(snapshot, delta, elapsed, selfId);
     animateFish(snapshot, elapsed);
     animateCrosshair(snapshot);
     animateEffects(snapshot, elapsed);

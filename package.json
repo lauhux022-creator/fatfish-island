@@ -1,6 +1,6 @@
 {
   "name": "fatfish-island",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -9,25 +9,30 @@
   "scripts": {
     "dev": "concurrently --kill-others-on-fail --names Node,Vite \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "node --watch --env-file-if-exists=.env --import tsx server/index.ts",
-    "dev:client": "vite --host 127.0.0.1 --strictPort",
+    "dev:client": "vite --strictPort",
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && vite build",
-    "preview": "vite preview --host 127.0.0.1 --strictPort",
+    "preview": "vite preview --strictPort",
     "test:smoke": "node scripts/smoke.mjs",
     "test:review": "node scripts/review-shift.mjs",
     "test:brain": "node --import tsx --test scripts/fish-brain.test.ts",
-    "test:m3": "node scripts/smoke-m3.mjs"
+    "test:m3": "node scripts/smoke-m3.mjs",
+    "start": "node --env-file-if-exists=.env --import tsx server/index.ts",
+    "test:m4": "node scripts/smoke-m4.mjs",
+    "test:rooms": "node --import tsx --test scripts/room-*.test.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.21.0",
-    "three": "0.186.1"
+    "three": "0.186.1",
+    "tsx": "4.23.15",
+    "ws": "8.23.0"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
     "@types/three": "0.186.0",
+    "@types/ws": "8.18.2",
     "concurrently": "10.0.7",
     "playwright-core": "1.65.0",
-    "tsx": "4.23.15",
     "typescript": "5.9.3",
     "vite": "8.3.5"
   }

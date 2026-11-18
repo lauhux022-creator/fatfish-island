@@ -2,6 +2,8 @@ import { STEP_SECONDS } from '../shared/sim/config';
 import { emptyInput, type SimInput, type SimSnapshot, type Vec3 } from '../shared/sim/types';
 import { createHud } from './hud';
 import { createSound } from './sound';
+import { createRoomClient, type RoomDebugState } from './net/room-client';
+import { createRoomLobby } from './room-lobby';
 import './style.css';
 
 declare const __GAME_VERSION__: string;
@@ -11,6 +13,8 @@ declare global {
   interface Window {
     fatfishDebug?: Readonly<{
       snapshot: () => SimSnapshot;
+      displayed: () => SimSnapshot;
+      network: () => RoomDebugState;
       project: (position: Vec3) => { x: number; y: number };
     }>;
   }
@@ -45,9 +49,49 @@ async function startGame() {
   let aimPointer: { x: number; y: number } | null = null;
   let mouseCast = false;
   let snapshot = sim.snapshot();
+  let displayed = snapshot;
+  let lastUiSnapshot: SimSnapshot | undefined;
+  let lastMode: RoomDebugState['mode'] = 'local';
+  let lobby: ReturnType<typeof createRoomLobby> | undefined;
+  const room = createRoomClient({
+    seed,
+    day: debug ? day : undefined,
+    shiftSeconds,
+    onStatus(status) {
+      if (status.mode !== lastMode) {
+        clearControls();
+        aimPointer = null;
+        queuedChat = undefined;
+        if (status.mode === 'local') {
+          snapshot = sim.snapshot();
+          displayed = snapshot;
+          lastUiSnapshot = undefined;
+        }
+        lastMode = status.mode;
+      }
+      lobby?.update(status);
+    },
+  });
+
+  lobby = createRoomLobby(app, { connect: room.connect, leave: room.leave });
+  lobby.update(room.status());
+
+  function lobbyOpen() {
+    return Boolean(app.querySelector('[data-room-dialog][open]'));
+  }
+
+  function canPlay() {
+    const mode = room.status().mode;
+    return (mode === 'local' || mode === 'playing') && !lobbyOpen();
+  }
 
   if (debug) {
-    window.fatfishDebug = Object.freeze({ snapshot: () => snapshot, project: scene.project });
+    window.fatfishDebug = Object.freeze({
+      snapshot: () => snapshot,
+      displayed: () => displayed,
+      network: room.debug,
+      project: scene.project,
+    });
   }
 
   function setCast(held: boolean) {
@@ -55,6 +99,19 @@ async function startGame() {
     input.castHeld = held;
     if (held) input.castPressed = true;
     else input.castReleased = true;
+  }
+
+  function clearControls(release = false) {
+    pressed.clear();
+    touch.clear();
+    mouseCast = false;
+    input.castReleased = release && input.castHeld;
+    input.castHeld = false;
+    input.castPressed = false;
+    input.swingPressed = false;
+    input.interactPressed = false;
+    input.jumpPressed = false;
+    input.continuePressed = false;
   }
 
   function toggleMute() {
@@ -70,6 +127,16 @@ async function startGame() {
     const target = event.target;
     if (event.ctrlKey || event.metaKey || event.altKey || event.defaultPrevented || event.isComposing) return;
     if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable]')) return;
+    if (lobbyOpen()) return;
+    if (event.code === 'KeyM') {
+      event.preventDefault();
+      if (!event.repeat) {
+        sound.unlock();
+        toggleMute();
+      }
+      return;
+    }
+    if (!canPlay()) return;
     if (snapshot.shiftPaused) {
       if (event.code === 'Enter' || event.code === 'NumpadEnter') {
         event.preventDefault();
@@ -83,7 +150,7 @@ async function startGame() {
     }
     if (target instanceof HTMLElement && target.closest('button, summary') && event.code === 'Space') return;
     if (!['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-      'Space', 'KeyF', 'KeyE', 'KeyM'].includes(event.code)) return;
+      'Space', 'KeyF', 'KeyE'].includes(event.code)) return;
     event.preventDefault();
     sound.unlock();
     pressed.add(event.code);
@@ -91,10 +158,13 @@ async function startGame() {
     if (event.code === 'Space') input.jumpPressed = true;
     if (event.code === 'KeyF') input.swingPressed = true;
     if (event.code === 'KeyE') input.interactPressed = true;
-    if (event.code === 'KeyM') toggleMute();
   }, options);
 
   addEventListener('keyup', (event) => pressed.delete(event.code), options);
+  app.addEventListener('fatfish:room-open', () => {
+    clearControls(true);
+    queuedChat = undefined;
+  }, options);
   app.addEventListener('focusin', (event) => {
     if (!(event.target instanceof Element) || !event.target.matches('[data-boss-input]')) return;
     pressed.clear();
@@ -112,19 +182,21 @@ async function startGame() {
   }
   window.visualViewport?.addEventListener('resize', resizeComposer, options);
   window.visualViewport?.addEventListener('scroll', resizeComposer, options);
-  addEventListener('blur', () => {
-    pressed.clear();
-    touch.clear();
-    mouseCast = false;
-    setCast(false);
+  addEventListener('blur', () => clearControls(true), options);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      clearControls(true);
+      queuedChat = undefined;
+    }
+    room.visibilityChanged();
   }, options);
 
   hud.canvas.addEventListener('pointermove', (event) => {
-    if (!snapshot.shiftPaused && event.pointerType !== 'touch') aimPointer = { x: event.clientX, y: event.clientY };
+    if (canPlay() && !snapshot.shiftPaused && event.pointerType !== 'touch') aimPointer = { x: event.clientX, y: event.clientY };
   }, options);
 
   hud.canvas.addEventListener('pointerdown', (event) => {
-    if (snapshot.shiftPaused) return;
+    if (!canPlay() || snapshot.shiftPaused) return;
     sound.unlock();
     const focused = document.activeElement;
     if (focused instanceof HTMLElement && focused.matches('button, [data-boss-input]')) focused.blur();
@@ -154,7 +226,7 @@ async function startGame() {
   hud.canvas.addEventListener('contextmenu', (event) => event.preventDefault(), options);
 
   app.addEventListener('pointerdown', (event) => {
-    if (snapshot.shiftPaused) return;
+    if (!canPlay() || snapshot.shiftPaused) return;
     if (!(event.target instanceof Element)) return;
     const button = event.target.closest<HTMLElement>('[data-control]');
     const control = button?.dataset.control;
@@ -184,7 +256,7 @@ async function startGame() {
   app.addEventListener('click', (event) => {
     if (!(event.target instanceof Element)) return;
     const control = event.target.closest<HTMLElement>('[data-control]')?.dataset.control;
-    if (control === 'continue' && snapshot.shiftPaused) input.continuePressed = true;
+    if (control === 'continue' && canPlay() && snapshot.shiftPaused) input.continuePressed = true;
     if (control === 'sound') {
       sound.unlock();
       toggleMute();
@@ -200,8 +272,6 @@ async function startGame() {
   let sceneElapsed = 0;
   let accumulated = 0;
   let raf = 0;
-  let lastUiSnapshot: SimSnapshot | undefined;
-
   function frame(now: number) {
     const elapsedMs = Math.min(now - previous, 100);
     previous = now;
@@ -209,21 +279,20 @@ async function startGame() {
     if (!snapshot.shiftPaused) sceneElapsed += elapsedMs / 1000;
 
     while (accumulated >= stepMs) {
-      input.moveX = direction('KeyD', 'ArrowRight', 'right') - direction('KeyA', 'ArrowLeft', 'left');
-      input.moveZ = direction('KeyS', 'ArrowDown', 'down') - direction('KeyW', 'ArrowUp', 'up');
-      if (!snapshot.shiftPaused && aimPointer) input.aim = scene.aim(aimPointer.x, aimPointer.y);
-      input.chat = queuedChat;
+      const active = canPlay();
+      input.moveX = active ? direction('KeyD', 'ArrowRight', 'right') - direction('KeyA', 'ArrowLeft', 'left') : 0;
+      input.moveZ = active ? direction('KeyS', 'ArrowDown', 'down') - direction('KeyW', 'ArrowUp', 'up') : 0;
+      if (active && !snapshot.shiftPaused && aimPointer) input.aim = scene.aim(aimPointer.x, aimPointer.y);
+      input.chat = active ? queuedChat : undefined;
       queuedChat = undefined;
-      sim.step(input);
-      const next = sim.snapshot();
-      sound.update(snapshot, next);
+
+      const mode = room.status().mode;
+      if (mode === 'local') sim.step(input);
+      else if (mode === 'playing') room.step(input);
+      const next = mode === 'local' ? sim.snapshot() : room.authoritative() ?? snapshot;
+      if (next !== snapshot && next.player.id === snapshot.player.id && next.tick >= snapshot.tick) sound.update(snapshot, next);
       const pauseChanged = next.shiftPaused !== snapshot.shiftPaused;
-      if (pauseChanged) {
-        pressed.clear();
-        touch.clear();
-        mouseCast = false;
-        input.castHeld = false;
-      }
+      if (pauseChanged) clearControls();
       snapshot = next;
       input.castPressed = false;
       input.castReleased = false;
@@ -238,16 +307,20 @@ async function startGame() {
       hud.update(snapshot);
       lastUiSnapshot = snapshot;
     }
+    const status = room.status();
+    displayed = status.mode === 'local' ? snapshot : room.present(now) ?? snapshot;
     const speaking = hud.isBossSpeaking();
-    scene.render(snapshot, sceneElapsed, speaking);
+    scene.render(displayed, sceneElapsed, speaking, status.mode === 'local' ? undefined : status.playerId);
     if (speaking) hud.setBossAnchor(scene.projectBossSpeech());
     raf = requestAnimationFrame(frame);
   }
 
+  room.restore();
   raf = requestAnimationFrame(frame);
   import.meta.hot?.dispose(() => {
     events.abort();
     cancelAnimationFrame(raf);
+    room.dispose();
     scene.dispose();
     sim.dispose();
     sound.dispose();

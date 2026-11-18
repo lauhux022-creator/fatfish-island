@@ -4,10 +4,12 @@ import { MockBrain } from '../fish-brain/mock';
 import { FishBrainRuntime, type FishRequest } from '../fish-brain/runtime';
 import type { FishBrain, FishBrainOutput, FishEvent, FishObservedEvent } from '../fish-brain/types';
 import { createBotController } from './bots';
+import { resolveMovement, yawRotation } from './prediction';
 import { seededRandom } from './random';
+import { emptyInput } from './types';
 import { BOSS, CREW, FISH, FISHING, ISLAND, PLAY, SHIFT, STEP_SECONDS, TEAM_DAILY_KPI, TICKS_PER_SECOND } from './config';
 import type {
-  BossLine, CrateView, FishKind, FishState, HookPhase, HookView, PlayerMetrics, PlayerView, Pose, RagdollLimb, Rotation,
+  BossLine, CrateView, FishKind, FishState, HookPhase, HookView, PlayerMetrics, PlayerView, Pose, RagdollLimb,
   ShiftResult, SimInput, SimNotice, SimSnapshot, Vec3,
 } from './types';
 
@@ -130,10 +132,6 @@ function distance(a: Direction, b: Direction) {
   return Math.hypot(a.x - b.x, a.z - b.z);
 }
 
-function yawRotation(yaw: number): Rotation {
-  return { x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) };
-}
-
 function pose(body: RigidBody): Pose {
   return { position: body.translation(), rotation: body.rotation() };
 }
@@ -186,7 +184,7 @@ class IslandSimulation {
   private result: ShiftResult | null = null;
   private tick = 0;
   private nextEntityId = 0;
-  private notice: SimNotice | null = null;
+  private readonly notices = new Map<string, SimNotice>();
   private noticeId = 0;
   private bossLine: BossLine | null = null;
   private bossInterview: BossLine | null = null;
@@ -222,19 +220,36 @@ class IslandSimulation {
     this.requestBoss('shift_start', null, '新一班开工');
   }
 
+  setSeat(id: string, humanName: string | null) {
+    const actor = this.actors.find((worker) => worker.id === id);
+    const slot = CREW.find((worker) => worker.id === id);
+    if (!actor || !slot) throw new RangeError('Unknown crew seat');
+
+    const name = humanName ?? (slot.bot ? slot.name : '阿班');
+    const bot = humanName === null;
+    if (actor.bot === bot && actor.name === name) return;
+    if (actor.hook.phase === 'charging') this.clearHook(actor);
+    this.bots.release(id);
+    this.notices.delete(id);
+    actor.name = name;
+    actor.bot = bot;
+  }
+
   step(input: SimInput, overrides: Readonly<Record<string, SimInput>> = {}) {
-    this.receiveBossChat(this.actors[0], input.chat);
+    const controls = this.actors.map((actor, index) =>
+      overrides[actor.id] ?? (index === 0 && !actor.bot ? input : undefined));
+    for (const [index, actor] of this.actors.entries()) {
+      if (!actor.bot && controls[index]?.chat) this.receiveBossChat(actor, controls[index].chat);
+    }
     if (this.shiftPaused) {
-      if (input.continuePressed) this.startNextShift();
+      if (this.actors.some((actor, index) => !actor.bot && controls[index]?.continuePressed)) this.startNextShift();
       this.advanceBoss();
       return;
     }
     this.advanceBoss();
-    const previous = this.actors.some((actor) => actor.bot && !overrides[actor.id]) ? this.snapshot() : null;
-    const inputs = this.actors.map((actor, index) => {
-      if (!actor.bot) return input;
-      return overrides[actor.id] ?? this.bots.input(previous!, previous!.players[index]);
-    });
+    const previous = this.actors.some((actor, index) => actor.bot && !controls[index]) ? this.snapshot() : null;
+    const inputs = this.actors.map((actor, index) =>
+      controls[index] ?? (actor.bot ? this.bots.input(previous!, previous!.players[index]) : emptyInput));
 
     this.tick += 1;
     for (const [index, actor] of this.actors.entries()) {
@@ -262,6 +277,7 @@ class IslandSimulation {
   snapshot(): SimSnapshot {
     const players = this.actors.map((actor) => this.viewActor(actor));
     const player = players[0];
+    const notices = Object.fromEntries([...this.notices].map(([id, notice]) => [id, { ...notice }]));
     return {
       tick: this.tick,
       time: this.time,
@@ -299,7 +315,8 @@ class IslandSimulation {
       crates: this.crates.map(({ id, body, state }) => ({ id, state, ...pose(body) })),
       cash: player.cash,
       sold: player.sold,
-      notice: this.notice && { ...this.notice },
+      notice: notices[player.id] ?? null,
+      notices,
     };
   }
 
@@ -478,9 +495,9 @@ class IslandSimulation {
     return amount;
   }
 
-  private announce(actor: Actor, text: string, tone: SimNotice['tone'] = 'info', other?: Actor, cue?: SimNotice['cue']) {
-    if (actor.bot && other?.bot !== false) return;
-    this.notice = { id: ++this.noticeId, text, tone, cue };
+  private announce(actor: Actor, text: string, tone: SimNotice['tone'] = 'info', cue?: SimNotice['cue']) {
+    if (actor.bot) return;
+    this.notices.set(actor.id, { id: ++this.noticeId, text, tone, cue });
   }
 
   private makeActor({ id, name, bot, spawn }: (typeof CREW)[number]): Actor {
@@ -503,6 +520,7 @@ class IslandSimulation {
     const { fishIncidents, ...metrics } = actor.metrics;
     const body = ragdoll[0]?.body ?? actor.body;
     const hook = actor.hook;
+    const velocity = body.linvel();
     const target: HookView['target'] = hook.bait ? 'player' : hook.target ? (isFish(hook.target) ? 'fish' : 'crate') : null;
     return {
       ...pose(body),
@@ -513,7 +531,8 @@ class IslandSimulation {
       metrics: { ...metrics, fishIncidents: fishIncidents.size, interference: metrics.paddleHits + metrics.fishStolen },
       baitedBy: actor.baitedBy?.id ?? null,
       rotation: ragdoll.length ? body.rotation() : yawRotation(yaw),
-      speed: ragdoll.length ? 0 : Math.hypot(body.linvel().x, body.linvel().z),
+      velocity,
+      speed: ragdoll.length ? 0 : Math.hypot(velocity.x, velocity.z),
       grounded: actor.groundContact && !ragdoll.length,
       swing: clamp((actor.swingUntil - this.time) / PLAY.swingSeconds, 0, 1),
       ragdoll: actor.recoverTick ? (actor.recoverTick - this.tick) * STEP_SECONDS : 0,
@@ -565,7 +584,7 @@ class IslandSimulation {
     this.escapedFish = 0;
     this.transferredFish.clear();
     this.affectedFish.clear();
-    this.notice = null;
+    this.notices.clear();
     this.day += 1;
     this.shiftEnd = this.tick + this.shiftLength;
     this.shiftPaused = false;
@@ -587,27 +606,22 @@ class IslandSimulation {
   private updatePlayer(actor: Actor, input: SimInput) {
     const position = actor.body.translation();
     const velocity = actor.body.linvel();
-    const moveLength = Math.max(1, Math.hypot(input.moveX, input.moveZ));
-    const move = { x: input.moveX / moveLength, z: input.moveZ / moveLength };
-    const focus = input.aim ? { x: input.aim.x - position.x, z: input.aim.z - position.z } : move;
-    const focusLength = Math.hypot(focus.x, focus.z);
-    if (focusLength > 0.05) {
-      actor.aim = { x: focus.x / focusLength, z: focus.z / focusLength };
+    actor.groundContact = position.y <= PLAYER_HEIGHT + 0.08 && Math.abs(velocity.y) < 0.7 && onLand(position);
+    const movement = resolveMovement({
+      position,
+      velocity,
+      grounded: actor.groundContact,
+      optimization: actor.optimization,
+      carrying: actor.carrying?.id ?? null,
+      baitedBy: actor.baitedBy?.id ?? null,
+    }, input);
+    if (movement.direction) {
+      actor.aim = movement.direction;
       actor.yaw = Math.atan2(-actor.aim.x, -actor.aim.z);
     }
-
-    actor.groundContact = position.y <= PLAYER_HEIGHT + 0.08 && Math.abs(velocity.y) < 0.7 && onLand(position);
-    const easing = actor.groundContact ? 0.36 : 0.12;
-    const penalty = actor.optimization ? SHIFT.optimizationSpeed : 1;
-    const speed = actor.baitedBy ? 0 : PLAY.moveSpeed * penalty * (actor.carrying ? PLAY.carrySpeed : 1);
-    actor.moveSpeed = Math.hypot(move.x, move.z) * speed;
-    const jumping = input.jumpPressed && actor.groundContact && !actor.baitedBy;
-    actor.body.setLinvel({
-      x: velocity.x + (move.x * speed - velocity.x) * easing,
-      y: jumping ? PLAY.jumpSpeed : velocity.y,
-      z: velocity.z + (move.z * speed - velocity.z) * easing,
-    }, true);
-    if (jumping) actor.groundContact = false;
+    actor.moveSpeed = movement.desiredSpeed;
+    actor.body.setLinvel(movement.velocity, true);
+    if (movement.jumped) actor.groundContact = false;
   }
 
   private updateCastInput(actor: Actor, input: SimInput) {
@@ -667,8 +681,8 @@ class IslandSimulation {
     this.clearHook(target);
     hook.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
     hook.body.setTranslation(this.baitPosition(target), true);
-    this.announce(owner, owner.bot ? `${owner.name}把你钩住了！` : `钩住了${target.name}！朝海点一下当鱼饵`,
-      owner.bot ? 'bad' : 'good', target);
+    this.announce(owner, `钩住了${target.name}！朝海点一下当鱼饵`, 'good');
+    this.announce(target, `${owner.name}把你钩住了！`, 'bad');
   }
 
   private baitPosition(actor: Actor) {
@@ -698,8 +712,8 @@ class IslandSimulation {
     hook.phase = 'flying';
     hook.deadline = this.time + seconds;
     this.startRagdoll(target, null, launchVector(origin, landing, seconds));
-    this.announce(owner, owner.bot ? `${owner.name}把你抛进海里当鱼饵！` : `${target.name}牌活饵，专钓大鱼！`,
-      owner.bot ? 'bad' : 'good', target);
+    this.announce(owner, `${target.name}牌活饵，专钓大鱼！`, 'good');
+    this.announce(target, `${owner.name}把你抛进海里当鱼饵！`, 'bad');
   }
 
   private updateFlyingHook(actor: Actor) {
@@ -945,7 +959,8 @@ class IslandSimulation {
         z: (point.z - position.z) / length * PLAY.friendlyKnockback,
       });
       this.observeCrew('friendly_hit', actor, teammate, `${actor.name}挥桨拍飞了${teammate.name}`);
-      this.announce(actor, actor.bot ? `${actor.name}把你一桨拍飞！` : `一桨拍飞了${teammate.name}！`, 'bad', teammate);
+      this.announce(actor, `一桨拍飞了${teammate.name}！`, 'bad');
+      this.announce(teammate, `${actor.name}把你一桨拍飞！`, 'bad');
       return;
     }
     if (!hit) return;
@@ -1030,14 +1045,14 @@ class IslandSimulation {
     if (item.baitPlayerId === actor.id) {
       this.announce(actor, '这条鱼用你当饵，你的绩效不计', 'info');
     } else if (victim) {
-      this.announce(actor, actor.bot ? `${actor.name}从你手里抢走了鱼！` : `从${victim.name}手里抢到鱼！`,
-        actor.bot ? 'bad' : 'good', victim);
+      this.announce(actor, `从${victim.name}手里抢到鱼！`, 'good');
     } else if (interceptorVictim) {
-      this.announce(actor, actor.bot ? `${actor.name}半空截走了你的鱼！` : '半空截胡！鱼到你手里了',
-        actor.bot ? 'bad' : 'good', interceptorVictim);
+      this.announce(actor, '半空截胡！鱼到你手里了', 'good');
     } else {
       this.announce(actor, '带到秤旁，准星对准秤按 E');
     }
+    if (victim) this.announce(victim, `${actor.name}从你手里抢走了鱼！`, 'bad');
+    if (interceptorVictim) this.announce(interceptorVictim, `${actor.name}半空截走了你的鱼！`, 'bad');
   }
 
   private touchFish(fish: Fish, actor: Actor) {
@@ -1136,7 +1151,7 @@ class IslandSimulation {
         if (worker) {
           worker.metrics.fishEscaped += 1;
           worker.metrics.fishIncidents.add(fish.id);
-          this.announce(worker, '扑通！鱼溜回海里了', 'bad', undefined, 'fish_escape');
+          this.announce(worker, '扑通！鱼溜回海里了', 'bad', 'fish_escape');
         }
         this.removeFish(fish);
       } else if (fish.state === 'thrown' && fish.body.linvel().y <= 0.25 && point.y < 0.56 && onLand(point)) {

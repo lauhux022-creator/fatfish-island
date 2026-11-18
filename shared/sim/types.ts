@@ -65,6 +65,7 @@ export interface ShiftMetrics {
 
 export interface PlayerView extends Pose {
   id: string;
+  velocity: Vec3;
   name: string;
   bot: boolean;
   cash: number;
@@ -184,4 +185,5 @@ export interface SimSnapshot {
   cash: number;
   sold: number;
   notice: SimNotice | null;
+  notices: Readonly<Partial<Record<string, SimNotice>>>;
 }

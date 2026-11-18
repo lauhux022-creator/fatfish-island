@@ -2,7 +2,7 @@
 
 [在线试玩](https://lauhux022-creator.github.io/fatfish-island/) · [开发进度](docs/progress.md) · [数值与设计](docs/design.md)
 
-给大肥鱼打工。甩一竿，把想逃跑的鱼拍晕，再连人带桨冲到秤边交货。M3 可在浏览器里和阿铲、桶桶、溜溜三个机器人一起上工。他们会钓鱼、交鱼，也会抢你的鱼。大肥鱼现在会抬价、砍价和记仇。
+给大肥鱼打工。甩一竿，把想逃跑的鱼拍晕，再连人带桨冲到秤边交货。M4 支持 2–4 人联机，也能在浏览器里和阿铲、桶桶、溜溜一起本地上工。他们会钓鱼、交鱼，也会抢你的鱼。大肥鱼现在会抬价、砍价和记仇。
 
 ## 本地开工
 
@@ -13,8 +13,16 @@ npm run dev
 ```
 
 - [游戏开发版](http://127.0.0.1:5173/fatfish-island/)
-- [Node 服务健康检查](http://127.0.0.1:8797/health)
+- [Node 房间服务健康检查](http://127.0.0.1:8797/health)
 - `npm run build` 检查类型并输出 `dist/`。`npm run preview` 预览静态产物。
+
+## 联机开工
+
+1. 在运行 `npm run dev` 的游戏页面点右上「联机」，填工牌名后创建房间。
+2. 把四位数字房间码发给连接同一服务的队友。队友在「联机」里输入工牌名和房间码，点「加入」。空位会由机器人上工，四个工位坐满后需要等空位。
+3. 断线后的工位立即转给机器人。页面恢复连接或刷新后，原玩家以只读观战跟随该工位。需要回到本地时，在「房间」面板点「离开房间」。
+
+同一台机器可用不同浏览器窗口试玩。局域网可在 `.env` 设 `ROOM_HOST=0.0.0.0`，再运行 `npm run dev`。队友使用这台主机的局域网 IP 和 Vite 端口 5173 打开 `/fatfish-island/`。默认监听地址为 `127.0.0.1`。
 
 ## 怎么玩
 
@@ -56,21 +64,26 @@ npm run dev
 
 `npm run test:m3` 覆盖老板五个触发时机与聊天裁决。`npm run test:brain` 验证 JSON 白名单、服务端请求格式和四秒超时回退。
 
+运行 `npm run test:rooms` 验证共享工位、真实 WebSocket 房间和 DeepSeek 模拟响应。先启动 `npm run dev`，再运行 `npm run test:m4`，从独立 Chrome 客户端验证满房、20 Hz 回执、插值、预测、访客递话、后台恢复和断线观战。设置 `SCREENSHOT_DIR=docs/screenshots` 可重拍 M4 图。用 `PAGES_ONLY=1` 加 `GAME_URL` 可检验线上静态试玩。
+
 ## 目录与联机配置
 
 | 路径 | 用途 |
 | --- | --- |
 | `shared/sim/` | 60 Hz 共享 Rapier 模拟、机器人输入、四人快照及集中数值 |
 | `shared/fish-brain/` | FishBrain 接口、MockBrain、输出校验、限频与待办队列 |
-| `client/` | Three.js 场景、程序化模型、HUD、浏览器输入与合成音效 |
-| `server/` | Node 开发服务、健康检查和服务端 DeepSeek 适配器 |
+| `client/` | Three.js 场景、HUD、房间入口、自己预测和其他实体插值 |
+| `shared/net/` | 联机消息及快照频率约定 |
+| `server/` | Node + ws 权威房间、健康检查和服务端 DeepSeek |
 | `docs/` | 进度、设计、实机截图 |
 | `reviews/` | 审查意见 |
 | `.github/workflows/pages.yml` | 构建并发布静态试玩 |
 
-浏览器和 Pages 默认使用 MockBrain。M4 将接入房间码、20 Hz 权威快照和断线观战。当前 Node 服务提供健康检查，服务端已预留联机房间调用的 `createOnlineFishBrain()`。
+`npm start` 可独立启动 Node 房间服务，接口为 `/fatfish-island/rooms`，默认端口 8797。对外托管时可在 TLS 反代上开放该 WebSocket 路径，并通过 `ROOM_ORIGINS` 放行浏览器来源。Vite 开发与本地预览走同源代理。
 
-把 `.env.example` 复制为 `.env` 可调整 Node 端口。联机接入后可给服务端填写 `DEEPSEEK_API_KEY` 和可选的 `DEEPSEEK_MODEL`，默认模型是 `deepseek-flash`。请求四秒超时或网络失败时回退 Mock，非法动作变为 `none`。[DeepSeek Chat Completions 文档](https://api-docs.deepseek.com/api/create-chat-completion/)
+Pages 默认打开本地模式，不需要房间服务。使用另行托管的房间时，在房间面板展开「房间服务地址」，填完整的 `wss://` 地址。自定义静态构建也可通过公开的 `VITE_ROOM_URL` 预填地址。
+
+把 `.env.example` 复制为服务端 `.env`，可选填 `DEEPSEEK_API_KEY` 和 `DEEPSEEK_MODEL`（默认 `deepseek-flash`）。每个联机房间由服务端创建自己的 FishBrain。没有配置密钥时使用 Mock。请求四秒超时或网络失败时回退到 Mock，客户端的本地试玩始终用 Mock。密钥只经 Node 环境读取。[DeepSeek Chat Completions 文档](https://api-docs.deepseek.com/api/create-chat-completion/)
 
 Pages 使用 GitHub Actions 发布 `main` 的静态产物，Vite base 为 `/fatfish-island/`。页面角落的版本和提交短哈希与构建来源对应。
 

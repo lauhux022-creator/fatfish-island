@@ -309,6 +309,8 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   const settlement = ui<HTMLElement>('[data-settlement]');
   const settlementKpi = ui('[data-settlement-kpi]');
   const settlementStatus = ui('[data-settlement-status]');
+  const continueButton = ui<HTMLButtonElement>('[data-control="continue"]');
+  let roomCode = '';
   let previousBoard = '';
   let boardPinned = false;
   let latest: SimSnapshot | undefined;
@@ -323,7 +325,7 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   }
 
   function focusChat() {
-    if (!latest || latest.shiftPaused) return false;
+    if (!latest || latest.shiftPaused || root.dataset.roomMode === 'spectating') return false;
     setChatOpen(true);
     bossInput.focus();
     return true;
@@ -447,9 +449,12 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   function updateStandings(snapshot: SimSnapshot) {
     const { result, players, player, shiftPaused, teamRevenue, teamTarget } = snapshot;
     const settled = shiftPaused ? result : null;
-    if (shiftPaused) boardPinned = false;
-    const visible = shiftPaused || boardPinned;
-    if (standings.open && (!visible || standings.matches(':modal') !== shiftPaused)) standings.close();
+    const spectator = root.dataset.roomMode === 'spectating' || root.dataset.roomMode === 'reconnecting';
+    const modal = shiftPaused && !spectator && !root.querySelector('[data-room-dialog][open]');
+    if (shiftPaused && !spectator) boardPinned = false;
+    const visible = (shiftPaused && !spectator) || boardPinned;
+    continueButton.hidden = spectator;
+    if (standings.open && (!visible || standings.matches(':modal') !== modal)) standings.close();
     if (standings.hidden === visible) {
       standings.hidden = !visible;
       toggle.setAttribute('aria-expanded', String(visible));
@@ -475,16 +480,16 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
         writeText(settlementStatus, teamRevenue >= teamTarget ? '达标' : '未达标');
         settlementStatus.classList.toggle('met', teamRevenue >= teamTarget);
       }
-      fillStandings(ranking, player.id);
+      fillStandings(ranking, spectator ? '' : player.id);
     }
     if (!standings.open) {
-      if (shiftPaused) standings.showModal();
+      if (modal) standings.showModal();
       else standings.show();
     }
   }
 
   toggle.addEventListener('click', () => {
-    if (!latest || latest.shiftPaused) return;
+    if (!latest || (latest.shiftPaused && root.dataset.roomMode !== 'spectating' && root.dataset.roomMode !== 'reconnecting')) return;
     boardPinned = !boardPinned;
     updateStandings(latest);
   });
@@ -501,6 +506,17 @@ export function createHud(root: HTMLElement, meta: HudMeta, sendChat: (text: str
   let noticeUntil = 0;
 
   function update(snapshot: SimSnapshot) {
+    const nextRoomCode = root.dataset.roomCode ?? '';
+    if (roomCode !== nextRoomCode) {
+      roomCode = nextRoomCode;
+      lastLineId = undefined;
+      lastNotice = null;
+      speakUntil = 0;
+      previousBoard = '';
+      boardPinned = false;
+      if (!bossForm.hidden) setChatOpen(false);
+    }
+    if (root.dataset.roomMode === 'spectating' && !bossForm.hidden) setChatOpen(false);
     const { hook, player, fish, crates, notice: event, tick, time } = snapshot;
     if (root.dataset.ready !== 'true') root.dataset.ready = 'true';
     latest = snapshot;

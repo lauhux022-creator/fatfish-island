@@ -835,3 +835,122 @@ h1 small {
   .boss-chat input { font-size: 16px; }
   .game:has(.boss-chat:focus-within) .touch-controls { visibility: hidden; }
 }
+
+.account-tools { display: flex; gap: 6px; }
+.room-toggle { color: var(--ink); background: var(--orange); border-color: var(--ink); }
+.room-toggle:hover, .room-toggle[aria-expanded="true"] { color: var(--ink); background: #ffd180; border-color: var(--ink); }
+
+.room-status {
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid #ffedd366;
+  border-radius: 5px;
+  background: var(--ink);
+  color: var(--light);
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.room-status[data-mode="spectating"],
+.room-status[data-mode="reconnecting"] { color: #ffe49c; }
+
+.room-dialog {
+  inset: 0;
+  width: min(420px, calc(100vw - 28px));
+  max-height: calc(100dvh - 28px);
+  margin: auto;
+  padding: 18px;
+  border: 2px solid var(--ink);
+  border-top: 5px solid #bb6b28;
+  border-radius: 9px;
+  background: var(--cream);
+  color: var(--ink);
+  box-shadow: var(--panel-shadow);
+  overflow: auto;
+}
+
+.room-dialog::backdrop { background: #102c299e; }
+.room-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.room-dialog h2 { margin: 0; font-size: 23px; font-weight: 900; }
+.room-dialog-head p { margin: 3px 0 12px; color: #485d49; font-size: 12px; font-weight: 700; }
+.room-dialog button {
+  min-height: 35px;
+  padding: 5px 10px;
+  border: 1.5px solid var(--ink);
+  border-radius: 5px;
+  background: var(--light);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+.room-dialog button:hover { background: #ffe1a8; }
+.room-dialog button:disabled { cursor: wait; opacity: .6; }
+.room-dialog .room-create { background: var(--orange); }
+.room-dialog .room-dismiss { width: 32px; min-height: 32px; padding: 0; font-size: 21px; line-height: 1; }
+.room-form { display: grid; gap: 12px; }
+.room-form label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  color: var(--ink);
+  font-weight: 800;
+  font-size: 12px;
+}
+.room-form input {
+  width: 100%;
+  min-width: 0;
+  height: 35px;
+  padding: 4px 8px;
+  border: 1px solid #756e51;
+  border-radius: 4px;
+  background: var(--light);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+.room-form input:focus-visible { outline: 2px solid #a4541a; outline-offset: 2px; }
+.room-form-actions { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; align-items: end; }
+.room-address { border-top: 1px dashed #927d4e; padding-top: 8px; }
+.room-address summary { cursor: pointer; font-size: 12px; font-weight: 800; }
+.room-address[open] input { margin-top: 6px; font-size: 12px; }
+.room-dialog .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.room-joined { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.room-slip {
+  display: flex;
+  grid-column: span 2;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 13px;
+  border: 1px dashed #977c48;
+  border-radius: 6px;
+  background: #f5dfb4;
+}
+.room-slip span { display: block; font-size: 11px; font-weight: 780; }
+.room-slip output { font-size: 36px; font-weight: 900; font-variant-numeric: tabular-nums; letter-spacing: .1em; line-height: 1; }
+.room-slip-meta { display: grid; justify-items: end; align-content: center; }
+.room-slip-meta strong { font-size: 14px; font-weight: 900; }
+.room-dialog .room-leave { color: #813421; border-color: #813421; }
+.room-feedback { margin: 9px 0 0; color: #52614d; font-size: 11px; font-weight: 720; }
+.room-feedback:empty { margin: 0; }
+.game[data-room-mode="spectating"] .task,
+.game[data-room-mode="spectating"] .touch-controls,
+.game[data-room-mode="spectating"] .key-legend,
+.game[data-room-mode="spectating"] .boss-chat-toggle,
+.game[data-room-mode="reconnecting"] .touch-controls { display: none; }
+
+@media (max-width: 500px) {
+  .room-dialog { padding: 14px; }
+  .room-status { font-size: 9px; padding: 2px 5px; }
+}

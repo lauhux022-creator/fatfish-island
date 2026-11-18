@@ -25,9 +25,7 @@ export function crewBadge(parent: T.Object3D, name: string, accent: string) {
   let current: BadgeStatus | undefined;
   let bodyWidth = 0;
 
-  function setStatus(status: BadgeStatus) {
-    if (status === current) return;
-    current = status;
+  function draw(status: BadgeStatus) {
     bodyWidth = status ? 254 : 135;
     const left = (textureWidth - bodyWidth) / 2;
 
@@ -64,12 +62,24 @@ export function crewBadge(parent: T.Object3D, name: string, accent: string) {
     texture.needsUpdate = true;
   }
 
+  function setStatus(status: BadgeStatus) {
+    if (status === current) return;
+    current = status;
+    draw(status);
+  }
+
+  function setName(next: string) {
+    if (name === next) return;
+    name = next;
+    draw(current ?? '');
+  }
+
   function resize(unitsPerPixel: number) {
     sprite.scale.set(pixelWidth * unitsPerPixel, pixelHeight * unitsPerPixel, 1);
   }
 
   return {
-    sprite, setStatus, resize, pixelHeight,
+    sprite, setName, setStatus, resize, pixelHeight,
     get pixelWidth() { return pixelWidth * bodyWidth / textureWidth; },
   };
 }

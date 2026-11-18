@@ -248,6 +248,12 @@ export function createBotController(seed: string) {
   const brains = new Map<BotId, Brain>();
   const claims = new Map<string, Claim>();
   return {
+    release(id: string) {
+      for (const [victim, claim] of claims) {
+        if (claim.hunter === id || victim === id) claims.delete(victim);
+      }
+      brains.delete(id as BotId);
+    },
     input(snapshot: SimSnapshot, player: PlayerView): SimInput {
       const id = player.id as BotId;
       const profile = BOTS.profiles[id];

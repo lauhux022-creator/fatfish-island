@@ -129,6 +129,7 @@ export const BOTS = {
   leaderWeight: 3.1,
   interferenceWeight: 0.84,
   profiles: {
+    player: { station: 0, depthOffset: 0.71, drop: { x: 4.3, z: 1.35 }, start: 5.5, jumpChance: 0.28, stealChance: 0.55 },
     'bot-1': { station: 0, depthOffset: 0.07, drop: { x: 3.8, z: 0.35 }, start: 5.9, jumpChance: 0.16, stealChance: 0.52 },
     'bot-2': { station: 1, depthOffset: -0.48, drop: { x: 4.15, z: -0.18 }, start: 6.7, jumpChance: 0.40, stealChance: 0.62 },
     'bot-3': { station: 1, depthOffset: 0.62, drop: { x: 4.15, z: 1.15 }, start: 7.9, jumpChance: 0.22, stealChance: 0.71 },
